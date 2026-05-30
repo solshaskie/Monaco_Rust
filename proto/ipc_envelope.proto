@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package code.ipc;
+
+// Core IPC envelope that replaces the JSON VQL protocol.
+// All channel communication is wrapped in these request/response messages.
+
+enum RequestType {
+  REQUEST_TYPE_UNSPECIFIED = 0;
+  REQUEST_TYPE_PROMISE = 1;
+  REQUEST_TYPE_PROMISE_CANCEL = 2;
+  REQUEST_TYPE_EVENT_LISTEN = 3;
+  REQUEST_TYPE_EVENT_DISPOSE = 4;
+}
+
+enum ResponseType {
+  RESPONSE_TYPE_UNSPECIFIED = 0;
+  RESPONSE_TYPE_INITIALIZE = 1;
+  RESPONSE_TYPE_PROMISE_SUCCESS = 2;
+  RESPONSE_TYPE_PROMISE_ERROR = 3;
+  RESPONSE_TYPE_PROMISE_ERROR_OBJ = 4;
+  RESPONSE_TYPE_EVENT_FIRE = 5;
+}
+
+// Sent from TypeScript frontend to Rust backend
+message IpcRequest {
+  uint32 id = 1;
+  string channel_name = 2;
+  string command_name = 3;
+  RequestType request_type = 4;
+  bytes payload = 5; // Protobuf-encoded command-specific message
+}
+
+// Sent from Rust backend to TypeScript frontend
+message IpcResponse {
+  uint32 id = 1;
+  ResponseType response_type = 2;
+  bytes payload = 3; // Protobuf-encoded command-specific message
+  string error_message = 4; // For PROMISE_ERROR
+  string error_stack = 5;   // For PROMISE_ERROR
+}
+
+// Wrapper for event streaming: server pushes these without a prior request id
+message IpcEvent {
+  uint32 subscription_id = 1;
+  bytes payload = 2;
+}

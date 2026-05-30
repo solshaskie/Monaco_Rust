@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Monaco Prototype",
+  "version": "0.1.0",
+  "identifier": "com.local.monaco.prototype",
+  "build": {
+    "beforeBuildCommand": "node ./scripts/prepare-tauri-dist.mjs",
+    "frontendDist": "../tauri-dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "csp": null
+    },
+    "windows": [
+      {
+        "title": "Monaco Prototype",
+        "width": 1400,
+        "height": 900,
+        "resizable": true,
+        "devtools": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": false
+  }
+}

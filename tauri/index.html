@@ -1,0 +1,1269 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Monaco Tauri Prototype</title>
+  <link rel="stylesheet" data-name="vs/editor/editor.main" href="/vendor/monaco-editor/min/vs/editor/editor.main.css" />
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #181818;
+      --panel: #1f1f1f;
+      --border: #2d2d2d;
+      --text: #d4d4d4;
+      --muted: #9da3ad;
+      --accent: #4fc1ff;
+    }
+
+    html,
+    body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", sans-serif;
+    }
+
+    body {
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    #app {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 280px 1fr;
+    }
+
+    .banner {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, #232323, var(--panel));
+      font-size: 13px;
+    }
+
+    .banner strong {
+      color: var(--accent);
+    }
+
+    #sidebar {
+      border-right: 1px solid var(--border);
+      background: #1b1b1b;
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .sidebar-section {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .sidebar-title {
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    #root-label,
+    #status,
+    #worker-status,
+    #language-status {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    #file-list {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .file-entry {
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+      padding: 6px 8px;
+      cursor: pointer;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+
+    .file-entry:hover,
+    .file-entry.active {
+      background: #2a2d2e;
+    }
+
+    #main {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+
+    #tabbar {
+      min-height: 38px;
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      gap: 8px;
+      border-bottom: 1px solid var(--border);
+      background: #1f1f1f;
+      font-size: 13px;
+    }
+
+    #tab-list {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      overflow-x: auto;
+    }
+
+    .tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      max-width: 240px;
+      padding: 6px 10px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .tab.active {
+      background: #2a2d2e;
+      border-color: #333638;
+      color: var(--text);
+    }
+
+    .tab-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tab-close {
+      border: 0;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      padding: 0;
+      font-size: 14px;
+      line-height: 1;
+    }
+
+    #current-path {
+      flex: 1;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    #container {
+      height: 100%;
+    }
+
+    #statusbar {
+      min-height: 28px;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      border-top: 1px solid var(--border);
+      background: #181818;
+      font-size: 12px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+
+<body>
+  <div class="banner">
+    <strong>Monaco Tauri Prototype</strong>
+    <span>- M3 local worker-backed editor shell on top of native Tauri host commands</span>
+  </div>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-title">Workspace</div>
+        <div id="root-label">Loading workspace...</div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-title">Workers</div>
+        <div id="worker-status">Waiting for Monaco runtime...</div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-title">Language</div>
+        <div id="language-status">No active document</div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-title">Files</div>
+        <div id="file-list"></div>
+      </div>
+    </aside>
+    <main id="main">
+      <div id="tabbar">
+        <div id="tab-list"></div>
+        <div id="current-path">No file open</div>
+      </div>
+      <div id="container"></div>
+      <div id="statusbar">
+        <div id="status">Initializing...</div>
+      </div>
+    </main>
+  </div>
+  <script src="/vendor/monaco-editor/min/vs/loader.js"></script>
+  <script>
+    const state = {
+      editor: null,
+      rootPath: "",
+      currentPath: "",
+      currentVersionId: 1,
+      entries: [],
+      tabs: [],
+      isApplyingRemoteEdits: false,
+      tokenCache: new Map(),
+      foldingCache: new Map(),
+      semanticTokensCache: new Map(),
+      diagnosticsCache: new Map(),
+      symbolsCache: new Map()
+    };
+
+    const jsKeywords = new Set([
+      "break", "case", "catch", "class", "const", "continue", "debugger", "default",
+      "delete", "do", "else", "export", "extends", "finally", "for", "function", "if",
+      "import", "in", "instanceof", "let", "new", "return", "super", "switch", "this",
+      "throw", "try", "typeof", "var", "void", "while", "with", "yield"
+    ]);
+
+    function invoke(command, args) {
+      const tauri = window.__TAURI__;
+      if (!tauri || !tauri.core || typeof tauri.core.invoke !== "function") {
+        throw new Error("Tauri invoke API is not available");
+      }
+      return tauri.core.invoke(command, args);
+    }
+
+    function setStatus(message) {
+      document.getElementById("status").textContent = message;
+    }
+
+    function setWorkerStatus(message) {
+      document.getElementById("worker-status").textContent = message;
+    }
+
+    function setLanguageStatus(message) {
+      document.getElementById("language-status").textContent = message;
+    }
+
+    function basename(path) {
+      return path.split("/").filter(Boolean).pop() || path;
+    }
+
+    function fileUri(path) {
+      return monaco.Uri.file(path);
+    }
+
+    function findIdentifierPosition(model, currentPosition) {
+      const lineNumber = currentPosition ? currentPosition.lineNumber : 1;
+      const lineText = model.getLineContent(lineNumber);
+      const identifierPattern = /\b[A-Za-z_$][A-Za-z0-9_$]*\b/g;
+      let match;
+      while ((match = identifierPattern.exec(lineText)) !== null) {
+        if (!jsKeywords.has(match[0])) {
+          return new monaco.Position(lineNumber, match.index + 1);
+        }
+      }
+      return currentPosition || new monaco.Position(1, 1);
+    }
+
+    function configureLanguageDefaults(monacoApi) {
+      monacoApi.languages.json.jsonDefaults.setDiagnosticsOptions({
+        validate: true,
+        allowComments: true,
+        schemas: [],
+        enableSchemaRequest: false
+      });
+      monacoApi.languages.typescript.typescriptDefaults.setEagerModelSync(true);
+      monacoApi.languages.typescript.javascriptDefaults.setEagerModelSync(true);
+    }
+
+    async function probeLanguageWorkers(monacoApi) {
+      const checks = [
+        {
+          label: "JSON",
+          run: async function () {
+            const model = monacoApi.editor.createModel(
+              '{\n  "name": "monaco-tauri"\n}\n',
+              "json",
+              monacoApi.Uri.parse("inmemory://worker-probe/config.json")
+            );
+            try {
+              const getWorker = await monacoApi.languages.json.getWorker();
+              const worker = await getWorker(model.uri);
+              await worker.doValidation(model.uri.toString());
+            } finally {
+              model.dispose();
+            }
+          }
+        },
+        {
+          label: "TypeScript",
+          run: async function () {
+            const model = monacoApi.editor.createModel(
+              "export const value: number = 1;\nvalue.toFixed();\n",
+              "typescript",
+              monacoApi.Uri.parse("inmemory://worker-probe/index.ts")
+            );
+            try {
+              const getWorker = await monacoApi.languages.typescript.getTypeScriptWorker();
+              const worker = await getWorker(model.uri);
+              await worker.getCompilerOptionsDiagnostics(model.uri.toString());
+            } finally {
+              model.dispose();
+            }
+          }
+        }
+      ];
+
+      setWorkerStatus("Checking local JSON and TypeScript workers...");
+      const results = await Promise.all(
+        checks.map(async function (check) {
+          try {
+            await check.run();
+            return { label: check.label, ok: true };
+          } catch (error) {
+            console.error(check.label + " worker probe failed", error);
+            return { label: check.label, ok: false, error: error };
+          }
+        })
+      );
+
+      const failures = results.filter((result) => !result.ok);
+      if (failures.length) {
+        setWorkerStatus(
+          "Worker issues: " +
+          failures
+            .map((result) => result.label)
+            .join(", ")
+        );
+        return;
+      }
+
+      setWorkerStatus(
+        "Workers ready: " +
+        results
+          .map((result) => result.label)
+          .join(", ")
+      );
+    }
+
+    function renderFileList() {
+      const fileList = document.getElementById("file-list");
+      fileList.innerHTML = "";
+      const entries = state.entries.filter((entry) => !entry.is_directory);
+
+      if (!entries.length) {
+        const empty = document.createElement("div");
+        empty.id = "status";
+        empty.textContent = "No files in workspace root";
+        fileList.appendChild(empty);
+        return;
+      }
+
+      for (const entry of entries) {
+        const button = document.createElement("button");
+        button.className = "file-entry" + (entry.path === state.currentPath ? " active" : "");
+        button.textContent = entry.name;
+        button.addEventListener("click", () => openDocument(entry.path));
+        fileList.appendChild(button);
+      }
+    }
+
+    function renderTabs() {
+      const tabList = document.getElementById("tab-list");
+      tabList.innerHTML = "";
+
+      if (!state.tabs.length) {
+        document.getElementById("current-path").textContent = "No file open";
+        return;
+      }
+
+      for (const tab of state.tabs) {
+        const tabButton = document.createElement("button");
+        tabButton.className = "tab" + (tab.path === state.currentPath ? " active" : "");
+        tabButton.addEventListener("click", function () {
+          activateTab(tab.path);
+        });
+
+        const label = document.createElement("span");
+        label.className = "tab-label";
+        label.textContent = tab.name;
+        tabButton.appendChild(label);
+
+        const close = document.createElement("button");
+        close.className = "tab-close";
+        close.textContent = "×";
+        close.title = "Close";
+        close.addEventListener("click", async function (event) {
+          event.stopPropagation();
+          await closeTab(tab.path);
+        });
+        tabButton.appendChild(close);
+
+        tabList.appendChild(tabButton);
+      }
+
+      document.getElementById("current-path").textContent = state.currentPath || "No file open";
+    }
+
+    function getOpenTab(path) {
+      return state.tabs.find((tab) => tab.path === path);
+    }
+
+    function activateTab(path) {
+      const tab = getOpenTab(path);
+      if (!tab || !state.editor) {
+        return;
+      }
+
+      state.currentPath = tab.path;
+      state.currentVersionId = tab.model.getAlternativeVersionId();
+      state.editor.setModel(tab.model);
+      renderTabs();
+      renderFileList();
+      setStatus("Opened " + tab.path);
+      probeActiveDocumentFeatures().catch((error) => {
+        console.error("Language probe failed", error);
+        setLanguageStatus("Language probe failed");
+      });
+    }
+
+    async function closeTab(path) {
+      const tabIndex = state.tabs.findIndex((tab) => tab.path === path);
+      if (tabIndex === -1) {
+        return;
+      }
+
+      const [tab] = state.tabs.splice(tabIndex, 1);
+      const wasActive = tab.path === state.currentPath;
+
+      try {
+        await invoke("close_document_json", {
+          request: {
+            path: tab.path,
+            save_if_dirty: false
+          }
+        });
+      } catch (error) {
+        console.error("close_document failed", error);
+      }
+
+      tab.model.dispose();
+
+      if (wasActive) {
+        const nextTab = state.tabs[tabIndex] || state.tabs[tabIndex - 1];
+        if (nextTab) {
+          activateTab(nextTab.path);
+        } else if (state.editor) {
+          state.currentPath = "";
+          state.currentVersionId = 1;
+          state.editor.setModel(null);
+          renderTabs();
+          renderFileList();
+          setLanguageStatus("No active document");
+          setStatus("Closed " + tab.path);
+          return;
+        }
+      }
+
+      renderTabs();
+      renderFileList();
+      setStatus("Closed " + tab.path);
+    }
+
+    async function loadWorkspace() {
+      const roots = await invoke("workspace_roots_json");
+      const root = roots.find((entry) => entry.is_primary) || roots[0];
+      if (!root) {
+        setStatus("No workspace roots configured");
+        return;
+      }
+
+      state.rootPath = root.path;
+      document.getElementById("root-label").textContent = root.path;
+      const entries = await invoke("list_directory_json", { path: root.path });
+      state.entries = entries;
+      renderFileList();
+      setStatus("Workspace ready");
+    }
+
+    async function openDocument(path) {
+      const existingTab = getOpenTab(path);
+      if (existingTab) {
+        activateTab(path);
+        return;
+      }
+
+      const response = await invoke("open_document_json", { path });
+      const model = monaco.editor.createModel(
+        response.content,
+        response.language_id || "plaintext",
+        fileUri(response.path)
+      );
+
+      model.onDidChangeContent(function (event) {
+        if (state.isApplyingRemoteEdits || !state.currentPath) {
+          return;
+        }
+        const edits = event.changes.map(function (change) {
+          return {
+            start_line: change.range.startLineNumber,
+            start_column: change.range.startColumn,
+            end_line: change.range.endLineNumber,
+            end_column: change.range.endColumn,
+            range_offset: change.rangeOffset,
+            range_length: change.rangeLength,
+            text: change.text
+          };
+        });
+        invoke("apply_edits_json", {
+          request: {
+            path: state.currentPath,
+            edits: edits
+          }
+        }).then(function (response) {
+          state.currentVersionId = response.new_version_id;
+          if (model.getLanguageId() === "rust" || model.getLanguageId() === "javascript" || model.getLanguageId() === "typescript") {
+            fetchTokens(state.currentPath);
+            fetchFoldingRanges(state.currentPath);
+            fetchSemanticTokens(state.currentPath);
+            fetchDiagnostics(state.currentPath);
+            fetchDocumentSymbols(state.currentPath);
+          }
+        }).catch(function (error) {
+          console.error("apply_edits failed", error);
+          setStatus("Edit sync failed: " + error.message);
+        });
+      });
+
+      state.tabs.push({
+        path: response.path,
+        name: basename(response.path),
+        model: model
+      });
+      state.currentPath = response.path;
+      state.currentVersionId = response.version_id || 1;
+      state.editor.setModel(model);
+      renderTabs();
+      renderFileList();
+      setStatus("Opened " + response.path);
+
+      if (response.language_id === "rust" || response.language_id === "javascript" || response.language_id === "typescript") {
+        fetchTokens(response.path);
+        fetchFoldingRanges(response.path);
+        fetchSemanticTokens(response.path);
+        fetchDiagnostics(response.path);
+        fetchDocumentSymbols(response.path);
+      }
+
+      probeActiveDocumentFeatures().catch((error) => {
+        console.error("Language probe failed", error);
+        setLanguageStatus("Language probe failed");
+      });
+    }
+
+    async function probeActiveDocumentFeatures(position) {
+      if (!state.editor) {
+        setLanguageStatus("No active document");
+        return;
+      }
+
+      const model = state.editor.getModel();
+      if (!model) {
+        setLanguageStatus("No active document");
+        return;
+      }
+
+      const languageId = model.getLanguageId();
+      const resource = model.uri.toString();
+      const currentPosition = position || state.editor.getPosition() || new monaco.Position(1, 1);
+      const probePosition =
+        (languageId === "javascript" || languageId === "typescript") &&
+          currentPosition &&
+          jsKeywords.has((model.getWordAtPosition(currentPosition) || {}).word || "")
+          ? findIdentifierPosition(model, currentPosition)
+          : currentPosition;
+      const offset = model.getOffsetAt(probePosition);
+      const currentWord = currentPosition ? model.getWordAtPosition(currentPosition) : null;
+      const currentLabel = currentWord ? currentWord.word : "cursor";
+      const probeWord = model.getWordAtPosition(probePosition);
+      const probeLabel = probeWord ? probeWord.word : currentLabel;
+
+      if (languageId === "javascript" || languageId === "typescript") {
+        const getWorker =
+          languageId === "typescript"
+            ? await monaco.languages.typescript.getTypeScriptWorker()
+            : await monaco.languages.typescript.getJavaScriptWorker();
+        const worker = await getWorker(model.uri);
+        const quickInfo = await worker.getQuickInfoAtPosition(resource, offset);
+        const diagnostics =
+          languageId === "typescript"
+            ? await worker.getSemanticDiagnostics(resource)
+            : await worker.getSuggestionDiagnostics(resource);
+        setLanguageStatus(
+          languageId.toUpperCase() +
+          " " +
+          currentLabel +
+          (currentLabel !== probeLabel ? " (probe " + probeLabel + ")" : "") +
+          ": quick info " +
+          (quickInfo ? "ready" : "missing") +
+          ", diagnostics " +
+          diagnostics.length
+        );
+        return;
+      }
+
+      if (languageId === "json") {
+        const getWorker = await monaco.languages.json.getWorker();
+        const worker = await getWorker(model.uri);
+        const diagnostics = await worker.doValidation(resource);
+        setLanguageStatus("JSON: diagnostics " + diagnostics.length);
+        return;
+      }
+
+      setLanguageStatus(languageId + ": no explicit probe");
+    }
+
+    async function fetchTokens(path) {
+      if (!path) return;
+      try {
+        const response = await invoke("tokenize_document_json", {
+          request: { path: path }
+        });
+        state.tokenCache.set(path, {
+          tokens: response.tokens,
+          version_id: response.version_id,
+          has_errors: response.has_errors
+        });
+        console.log("Tokens fetched for " + path + ":", response.tokens.length, "tokens, errors:", response.has_errors);
+      } catch (error) {
+        console.error("tokenize_document failed", error);
+      }
+    }
+
+    async function fetchFoldingRanges(path) {
+      if (!path) return;
+      try {
+        const response = await invoke("fold_document_json", {
+          request: { path: path }
+        });
+        state.foldingCache.set(path, {
+          ranges: response.ranges,
+          version_id: response.version_id
+        });
+        console.log("Folding ranges fetched for " + path + ":", response.ranges.length);
+      } catch (error) {
+        console.error("fold_document failed", error);
+      }
+    }
+
+    async function fetchSemanticTokens(path) {
+      if (!path) return;
+      try {
+        var cached = state.semanticTokensCache.get(path);
+        var response;
+        if (cached && cached.result_id) {
+          response = await invoke("semantic_tokens_delta_document_json", {
+            request: { path: path, previous_result_id: cached.result_id }
+          });
+          if (response.data && response.data.length > 0) {
+            // Full replacement for now (true diff not yet implemented)
+            state.semanticTokensCache.set(path, {
+              data: response.data,
+              result_id: response.result_id
+            });
+            console.log("Semantic tokens delta for " + path + ":", response.data.length / 5, "tokens");
+          } else {
+            console.log("Semantic tokens delta for " + path + ": no changes");
+          }
+        } else {
+          response = await invoke("semantic_tokens_document_json", {
+            request: { path: path }
+          });
+          state.semanticTokensCache.set(path, {
+            data: response.data,
+            result_id: response.version_id
+          });
+          console.log("Semantic tokens fetched for " + path + ":", response.data.length / 5, "tokens");
+        }
+      } catch (error) {
+        console.error("semantic_tokens fetch failed", error);
+      }
+    }
+
+    async function fetchDiagnostics(path) {
+      if (!path) return;
+      try {
+        const response = await invoke("diagnostics_document_json", {
+          request: { path: path }
+        });
+        state.diagnosticsCache.set(path, {
+          diagnostics: response.diagnostics,
+          version_id: response.version_id
+        });
+        console.log("Diagnostics fetched for " + path + ":", response.diagnostics.length, "issues");
+
+        // Update Monaco markers
+        if (state.editor && state.currentPath === path) {
+          const model = state.editor.getModel();
+          if (model) {
+            var markers = response.diagnostics.map(function (d) {
+              var severity = d.severity === 1
+                ? window.monaco.MarkerSeverity.Error
+                : d.severity === 2
+                  ? window.monaco.MarkerSeverity.Warning
+                  : d.severity === 3
+                    ? window.monaco.MarkerSeverity.Info
+                    : window.monaco.MarkerSeverity.Hint;
+              return {
+                startLineNumber: d.start_line,
+                startColumn: d.start_column,
+                endLineNumber: d.end_line,
+                endColumn: d.end_column,
+                message: d.message,
+                severity: severity,
+                source: d.source,
+                code: d.code
+              };
+            });
+            var sourceLabel = model.getLanguageId() === "rust"
+              ? "tree-sitter-rust"
+              : model.getLanguageId() === "javascript"
+                ? "tree-sitter-javascript"
+                : "tree-sitter-typescript";
+            window.monaco.editor.setModelMarkers(model, sourceLabel, markers);
+          }
+        }
+      } catch (error) {
+        console.error("diagnostics_document failed", error);
+      }
+    }
+
+    async function fetchDocumentSymbols(path) {
+      if (!path) return;
+      try {
+        const response = await invoke("document_symbols_document_json", {
+          request: { path: path }
+        });
+        state.symbolsCache.set(path, {
+          symbols: response.symbols,
+          version_id: response.version_id
+        });
+        console.log("Document symbols fetched for " + path + ":", response.symbols.length, "symbols");
+      } catch (error) {
+        console.error("document_symbols_document failed", error);
+      }
+    }
+
+    async function saveCurrentDocument() {
+      if (!state.currentPath || !state.editor) {
+        setStatus("Nothing to save");
+        return;
+      }
+
+      const model = state.editor.getModel();
+      if (!model) {
+        setStatus("No active model");
+        return;
+      }
+
+      const versionId = await invoke("save_document_json", {
+        request: {
+          path: state.currentPath,
+          content: model.getValue(),
+          version_id: model.getAlternativeVersionId()
+        }
+      });
+      state.currentVersionId = versionId;
+      setStatus("Saved " + state.currentPath);
+    }
+
+    require.config({ paths: { vs: "/vendor/monaco-editor/min/vs" } });
+    require(["vs/editor/editor.main"], function () {
+      window.monaco.editor.setTheme("vs-dark");
+      window.monaco.editor.defineTheme("vsc-dark", {
+        base: "vs-dark",
+        inherit: true,
+        rules: [],
+        colors: {
+          "editor.background": "#1e1e1e"
+        }
+      });
+
+      state.editor = window.monaco.editor.create(document.getElementById("container"), {
+        value: "",
+        language: "plaintext",
+        theme: "vs-dark",
+        automaticLayout: true,
+        minimap: { enabled: false },
+        hover: { enabled: true }
+      });
+
+      configureLanguageDefaults(window.monaco);
+
+      window.monaco.languages.registerDocumentSemanticTokensProvider("rust", {
+        getLegend: function () {
+          return {
+            tokenTypes: [
+              "keyword", "identifier", "string", "number",
+              "comment", "operator", "type", "macro"
+            ],
+            tokenModifiers: []
+          };
+        },
+        provideDocumentSemanticTokens: function (model, lastResultId, token) {
+          var path = state.currentPath;
+          var entry = path ? state.semanticTokensCache.get(path) : null;
+          if (!entry) {
+            return { data: new Uint32Array(0) };
+          }
+          return { data: new Uint32Array(entry.data) };
+        },
+        releaseDocumentSemanticTokens: function (resultId) {
+          // No-op
+        }
+      });
+
+      window.monaco.languages.registerHoverProvider("rust", {
+        provideHover: async function (model, position, token) {
+          var path = state.currentPath;
+          if (!path) return null;
+          try {
+            var response = await invoke("hover_document_json", {
+              request: { path: path, line: position.lineNumber, column: position.column }
+            });
+            return {
+              contents: [{ value: response.contents }],
+              range: {
+                startLineNumber: response.start_line,
+                startColumn: response.start_column,
+                endLineNumber: response.end_line,
+                endColumn: response.end_column
+              }
+            };
+          } catch (error) {
+            console.error("hover_document failed", error);
+            return null;
+          }
+        }
+      });
+
+      window.monaco.languages.registerDocumentSymbolProvider("rust", {
+        provideDocumentSymbols: function (model, token) {
+          var path = state.currentPath;
+          var entry = path ? state.symbolsCache.get(path) : null;
+          if (!entry) {
+            return [];
+          }
+          function convert(s) {
+            return {
+              name: s.name,
+              detail: s.detail,
+              kind: window.monaco.languages.SymbolKind[s.kind.charAt(0).toUpperCase() + s.kind.slice(1)] || window.monaco.languages.SymbolKind.Variable,
+              range: {
+                startLineNumber: s.start_line,
+                startColumn: s.start_column,
+                endLineNumber: s.end_line,
+                endColumn: s.end_column
+              },
+              selectionRange: {
+                startLineNumber: s.start_line,
+                startColumn: s.start_column,
+                endLineNumber: s.end_line,
+                endColumn: s.end_column
+              },
+              children: s.children ? s.children.map(convert) : []
+            };
+          }
+          return entry.symbols.map(convert);
+        }
+      });
+
+      window.monaco.languages.registerFoldingRangeProvider("rust", {
+        provideFoldingRanges: function (model, context, token) {
+          var path = state.currentPath;
+          var entry = path ? state.foldingCache.get(path) : null;
+          if (!entry) {
+            return [];
+          }
+          return entry.ranges.map(function (r) {
+            return {
+              start: r.start_line,
+              end: r.end_line,
+              kind: r.kind
+            };
+          });
+        }
+      });
+
+      window.monaco.languages.registerCompletionItemProvider("rust", {
+        triggerCharacters: ["."],
+        provideCompletionItems: async function (model, position, context, token) {
+          var path = state.currentPath;
+          if (!path) return { suggestions: [] };
+          try {
+            var response = await invoke("completion_document_json", {
+              request: {
+                path: path,
+                line: position.lineNumber,
+                column: position.column,
+                trigger_character: context.triggerCharacter || ""
+              }
+            });
+            var suggestions = response.items.map(function (item) {
+              var kind = window.monaco.languages.CompletionItemKind[item.kind.charAt(0).toUpperCase() + item.kind.slice(1)]
+                || window.monaco.languages.CompletionItemKind.Text;
+              return {
+                label: item.label,
+                kind: kind,
+                detail: item.detail,
+                documentation: { value: item.documentation },
+                insertText: item.insert_text,
+                sortText: item.sort_text,
+                filterText: item.filter_text
+              };
+            });
+            return { suggestions: suggestions };
+          } catch (error) {
+            console.error("completion_document failed", error);
+            return { suggestions: [] };
+          }
+        }
+      });
+
+      // Register the same providers for JavaScript and TypeScript
+      ["javascript", "typescript"].forEach(function (lang) {
+        window.monaco.languages.registerDocumentSemanticTokensProvider(lang, {
+          getLegend: function () {
+            return {
+              tokenTypes: [
+                "keyword", "identifier", "string", "number",
+                "comment", "operator", "type", "macro"
+              ],
+              tokenModifiers: []
+            };
+          },
+          provideDocumentSemanticTokens: function (model, lastResultId, token) {
+            var path = state.currentPath;
+            var entry = path ? state.semanticTokensCache.get(path) : null;
+            if (!entry) {
+              return { data: new Uint32Array(0) };
+            }
+            return { data: new Uint32Array(entry.data) };
+          },
+          releaseDocumentSemanticTokens: function (resultId) {
+            // No-op
+          }
+        });
+
+        window.monaco.languages.registerHoverProvider(lang, {
+          provideHover: async function (model, position, token) {
+            var path = state.currentPath;
+            if (!path) return null;
+            try {
+              var response = await invoke("hover_document_json", {
+                request: { path: path, line: position.lineNumber, column: position.column }
+              });
+              return {
+                contents: [{ value: response.contents }],
+                range: {
+                  startLineNumber: response.start_line,
+                  startColumn: response.start_column,
+                  endLineNumber: response.end_line,
+                  endColumn: response.end_column
+                }
+              };
+            } catch (error) {
+              console.error("hover_document failed", error);
+              return null;
+            }
+          }
+        });
+
+        window.monaco.languages.registerDocumentSymbolProvider(lang, {
+          provideDocumentSymbols: function (model, token) {
+            var path = state.currentPath;
+            var entry = path ? state.symbolsCache.get(path) : null;
+            if (!entry) {
+              return [];
+            }
+            function convert(s) {
+              return {
+                name: s.name,
+                detail: s.detail,
+                kind: window.monaco.languages.SymbolKind[s.kind.charAt(0).toUpperCase() + s.kind.slice(1)] || window.monaco.languages.SymbolKind.Variable,
+                range: {
+                  startLineNumber: s.start_line,
+                  startColumn: s.start_column,
+                  endLineNumber: s.end_line,
+                  endColumn: s.end_column
+                },
+                selectionRange: {
+                  startLineNumber: s.start_line,
+                  startColumn: s.start_column,
+                  endLineNumber: s.end_line,
+                  endColumn: s.end_column
+                },
+                children: s.children ? s.children.map(convert) : []
+              };
+            }
+            return entry.symbols.map(convert);
+          }
+        });
+
+        window.monaco.languages.registerFoldingRangeProvider(lang, {
+          provideFoldingRanges: function (model, context, token) {
+            var path = state.currentPath;
+            var entry = path ? state.foldingCache.get(path) : null;
+            if (!entry) {
+              return [];
+            }
+            return entry.ranges.map(function (r) {
+              return {
+                start: r.start_line,
+                end: r.end_line,
+                kind: r.kind
+              };
+            });
+          }
+        });
+
+        window.monaco.languages.registerCompletionItemProvider(lang, {
+          triggerCharacters: ["."],
+          provideCompletionItems: async function (model, position, context, token) {
+            var path = state.currentPath;
+            if (!path) return { suggestions: [] };
+            try {
+              var response = await invoke("completion_document_json", {
+                request: {
+                  path: path,
+                  line: position.lineNumber,
+                  column: position.column,
+                  trigger_character: context.triggerCharacter || ""
+                }
+              });
+              var suggestions = response.items.map(function (item) {
+                var kind = window.monaco.languages.CompletionItemKind[item.kind.charAt(0).toUpperCase() + item.kind.slice(1)]
+                  || window.monaco.languages.CompletionItemKind.Text;
+                return {
+                  label: item.label,
+                  kind: kind,
+                  detail: item.detail,
+                  documentation: { value: item.documentation },
+                  insertText: item.insert_text,
+                  sortText: item.sort_text,
+                  filterText: item.filter_text
+                };
+              });
+              return { suggestions: suggestions };
+            } catch (error) {
+              console.error("completion_document failed", error);
+              return { suggestions: [] };
+            }
+          }
+        });
+      });
+
+      // Listen for push diagnostics from the backend
+      if (window.__TAURI__ && window.__TAURI__.event) {
+        window.__TAURI__.event.listen("diagnostics-changed", function (event) {
+          var payload = event.payload;
+          if (!payload || !payload.path) return;
+          state.diagnosticsCache.set(payload.path, {
+            diagnostics: payload.diagnostics,
+            version_id: payload.version_id
+          });
+          if (state.editor && state.currentPath === payload.path) {
+            var model = state.editor.getModel();
+            if (model) {
+              var markers = payload.diagnostics.map(function (d) {
+                var severity = d.severity === 1
+                  ? window.monaco.MarkerSeverity.Error
+                  : d.severity === 2
+                    ? window.monaco.MarkerSeverity.Warning
+                    : d.severity === 3
+                      ? window.monaco.MarkerSeverity.Info
+                      : window.monaco.MarkerSeverity.Hint;
+                return {
+                  startLineNumber: d.start_line,
+                  startColumn: d.start_column,
+                  endLineNumber: d.end_line,
+                  endColumn: d.end_column,
+                  message: d.message,
+                  severity: severity,
+                  source: d.source,
+                  code: d.code
+                };
+              });
+              var sourceLabel = model.getLanguageId() === "rust"
+                ? "tree-sitter-rust"
+                : model.getLanguageId() === "javascript"
+                  ? "tree-sitter-javascript"
+                  : "tree-sitter-typescript";
+              window.monaco.editor.setModelMarkers(model, sourceLabel, markers);
+              console.log("Push diagnostics updated for " + payload.path + ":", markers.length, "markers");
+            }
+          }
+        });
+
+        // Listen for buffer content changes (multi-view sync / agent-driven editing)
+        window.__TAURI__.event.listen("buffer-content-changed", function (event) {
+          var payload = event.payload;
+          if (!payload || !payload.path || !payload.changes) return;
+
+          var tab = state.tabs.find(function (t) { return t.path === payload.path; });
+          if (!tab || !tab.model) return;
+
+          // Version guard: skip stale events
+          var currentVersion = tab.model.getAlternativeVersionId();
+          if (payload.version_id < currentVersion) {
+            console.log("Skipping stale buffer-content-changed for " + payload.path +
+              " (event v" + payload.version_id + " < current v" + currentVersion + ")");
+            return;
+          }
+
+          var edits = payload.changes.map(function (change) {
+            return {
+              range: new window.monaco.Range(
+                change.start_line,
+                change.start_column,
+                change.end_line,
+                change.end_column
+              ),
+              text: change.text,
+              forceMoveMarkers: true
+            };
+          });
+
+          state.isApplyingRemoteEdits = true;
+          try {
+            tab.model.applyEdits(edits);
+            state.currentVersionId = payload.version_id;
+            console.log("Applied remote edits for " + payload.path +
+              " (v" + payload.version_id + ", " + edits.length + " edits, undoing=" +
+              payload.is_undoing + ", redoing=" + payload.is_redoing + ")");
+          } finally {
+            state.isApplyingRemoteEdits = false;
+          }
+        });
+
+        window.__TAURI__.event.listen("buffer-opened", function (event) {
+          var payload = event.payload;
+          if (!payload || !payload.path) return;
+          console.log("Buffer opened event:", payload.path, "v" + payload.version_id);
+        });
+
+        window.__TAURI__.event.listen("buffer-closed", function (event) {
+          var payload = event.payload;
+          if (!payload || !payload.path) return;
+          console.log("Buffer closed event:", payload.path);
+        });
+
+        window.__TAURI__.event.listen("buffer-saved", function (event) {
+          var payload = event.payload;
+          if (!payload || !payload.path) return;
+          if (state.currentPath === payload.path) {
+            setStatus("Saved " + payload.path + " (v" + payload.version_id + ")");
+          }
+        });
+      }
+
+      state.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function () {
+        saveCurrentDocument().catch((error) => setStatus("Save failed: " + error.message));
+      });
+
+      state.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyW, async function () {
+        if (state.currentPath) {
+          await closeTab(state.currentPath);
+        }
+      });
+
+      state.editor.onDidChangeCursorPosition(function (event) {
+        probeActiveDocumentFeatures(event.position).catch((error) => {
+          console.error("Language probe failed", error);
+          setLanguageStatus("Language probe failed");
+        });
+      });
+
+      // --- WASM Compute Module (W1.1) ---
+      (async function initWASM() {
+        try {
+          const { initWasmCompute, tokenize, computeDiff, computeLayout, computeVisibleLines, countLines } = await import('./wasm-glue.js');
+          await initWasmCompute();
+          console.log('[WASM] Compute module loaded');
+
+          // Expose for debugging / testing
+          window.wasmCompute = {
+            tokenize: (src, lang) => tokenize(src, lang),
+            diff: (old, neu) => computeDiff(old, neu),
+            layout: (src, w) => computeLayout(src, w),
+            visibleLines: (src, lh, st, vh) => computeVisibleLines(src, lh, st, vh),
+            countLines: (src) => countLines(src),
+          };
+
+          // Register WASM-backed semantic token provider (W1.2)
+          try {
+            const { registerWasmTokenizer } = await import('./wasm-tokenizer-provider.js');
+            registerWasmTokenizer(window.monaco, 'rust');
+            registerWasmTokenizer(window.monaco, 'javascript');
+            registerWasmTokenizer(window.monaco, 'typescript');
+            console.log('[WASM] Tokenizer providers registered');
+          } catch (e) {
+            console.warn('[WASM] Tokenizer registration failed:', e);
+          }
+
+          // Apply Monaco compatibility shim (W2.5)
+          try {
+            const { shimMonacoEditor } = await import('./src/renderer/compatibility.js');
+            if (state.editor) {
+              state.shim = shimMonacoEditor(state.editor);
+              state.shim.enableWasmTokenization();
+              console.log('[WASM] Monaco compatibility shim applied');
+            }
+          } catch (e) {
+            console.warn('[WASM] Compatibility shim failed:', e);
+          }
+        } catch (e) {
+          console.warn('[WASM] Failed to load compute module:', e);
+        }
+      })();
+
+      Promise.all([
+        probeLanguageWorkers(window.monaco),
+        loadWorkspace()
+      ])
+        .then(() => {
+          const firstFile = state.entries.find((entry) => !entry.is_directory && entry.path);
+          if (firstFile) {
+            return openDocument(firstFile.path);
+          }
+          return undefined;
+        })
+        .catch((error) => {
+          console.error(error);
+          setStatus("Initialization failed: " + error.message);
+        });
+    });
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,215 @@
+syntax = "proto3";
+
+package code.ipc.editor.language;
+
+import "ipc_file.proto";
+
+// Language feature operations that may route through native services,
+// extension-host, or remain WASM-local depending on latency analysis.
+// These ride inside the IpcRequest/IpcResponse envelope as payload bytes.
+
+// ---------------------------------------------------------------------------
+// Completion
+// ---------------------------------------------------------------------------
+
+message CompletionRequest {
+  code.ipc.file.Uri resource = 1;
+  uint32 line = 2;
+  uint32 column = 3;
+  uint64 version_id = 4;
+  string trigger_character = 5;   // e.g. ".", ":", ">"
+}
+
+message CompletionItem {
+  string label = 1;
+  string kind = 2;                  // method, function, constructor, field, variable, class, etc.
+  string detail = 3;
+  bytes documentation_utf8 = 4;   // Raw markdown or plain text
+  string insert_text = 5;
+  string sort_text = 6;
+  string filter_text = 7;
+  bool is_snippet = 8;
+  repeated string additional_text_edits = 9; // JSON-encoded TextEdit array (compressed)
+}
+
+message CompletionResponse {
+  repeated CompletionItem items = 1;
+  bool is_incomplete = 2;
+  uint64 version_id = 3;           // The buffer version this completion is valid for
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------------
+
+enum DiagnosticSeverity {
+  DIAGNOSTIC_SEVERITY_UNSPECIFIED = 0;
+  DIAGNOSTIC_SEVERITY_ERROR = 1;
+  DIAGNOSTIC_SEVERITY_WARNING = 2;
+  DIAGNOSTIC_SEVERITY_INFORMATION = 3;
+  DIAGNOSTIC_SEVERITY_HINT = 4;
+}
+
+message Diagnostic {
+  uint32 start_line = 1;
+  uint32 start_column = 2;
+  uint32 end_line = 3;
+  uint32 end_column = 4;
+  string message = 5;
+  DiagnosticSeverity severity = 6;
+  string code = 7;                   // Error/warning code (string for flexibility)
+  string source = 8;                 // e.g. "typescript", "eslint", "rust-analyzer"
+  bytes related_information = 9;     // Optional JSON-encoded array of related info
+}
+
+message DiagnosticRequest {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+}
+
+message DiagnosticResponse {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+  repeated Diagnostic diagnostics = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Hover
+// ---------------------------------------------------------------------------
+
+message HoverRequest {
+  code.ipc.file.Uri resource = 1;
+  uint32 line = 2;
+  uint32 column = 3;
+  uint64 version_id = 4;
+}
+
+message HoverResponse {
+  bytes contents_utf8 = 1;         // Markdown or plaintext
+  uint32 start_line = 2;
+  uint32 start_column = 3;
+  uint32 end_line = 4;
+  uint32 end_column = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Document Symbols
+// ---------------------------------------------------------------------------
+
+message DocumentSymbolRequest {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+}
+
+message DocumentSymbol {
+  string name = 1;
+  string detail = 2;
+  string kind = 3;                   // class, method, function, property, etc.
+  uint32 start_line = 4;
+  uint32 start_column = 5;
+  uint32 end_line = 6;
+  uint32 end_column = 7;
+  repeated DocumentSymbol children = 8;
+  bool is_deprecated = 9;
+}
+
+message DocumentSymbolResponse {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+  repeated DocumentSymbol symbols = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Semantic Tokens
+// ---------------------------------------------------------------------------
+
+// Packed encoding: lineDelta, charDelta, length, tokenType, tokenModifiers
+// Matches LSP SemanticTokens legend encoding.
+
+message SemanticTokensRequest {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+}
+
+message SemanticTokensResponse {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+  repeated uint32 data = 3;          // 5-tuple packed uint32 array
+}
+
+message SemanticTokensDeltaRequest {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+  uint64 previous_result_id = 3;
+}
+
+message SemanticTokensDeltaResponse {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+  uint64 result_id = 3;
+  repeated uint32 data = 4;          // Full or delta-encoded packed array
+  repeated uint32 removed = 5;       // Indices removed from previous result
+}
+
+// ---------------------------------------------------------------------------
+// Tree-sitter Tokenization
+// ---------------------------------------------------------------------------
+
+message SyntaxToken {
+  string token_type = 1;             // keyword, identifier, string, number, comment, operator, delimiter, type, macro
+  uint32 start_line = 2;             // 1-indexed
+  uint32 start_column = 3;           // 1-indexed
+  uint32 end_line = 4;               // 1-indexed
+  uint32 end_column = 5;             // 1-indexed
+  string text = 6;                   // Token text for debugging / verification
+}
+
+message TokenizationRequest {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;             // 0 = use latest
+}
+
+message TokenizationResponse {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+  repeated SyntaxToken tokens = 3;
+  bool has_errors = 4;                 // true if parse tree contained error nodes
+}
+
+// ---------------------------------------------------------------------------
+// Folding Ranges
+// ---------------------------------------------------------------------------
+
+message FoldingRange {
+  uint32 start_line = 1;             // 1-indexed
+  uint32 end_line = 2;               // 1-indexed
+  string kind = 3;                   // "comment", "imports", "region" or omitted
+}
+
+message FoldingRangeRequest {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;             // 0 = use latest
+}
+
+message FoldingRangeResponse {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+  repeated FoldingRange ranges = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Push events (carried in IpcEvent envelope)
+// ---------------------------------------------------------------------------
+
+message LanguageFeatureEvent {
+  enum EventType {
+    LANGUAGE_FEATURE_EVENT_TYPE_UNSPECIFIED = 0;
+    LANGUAGE_FEATURE_EVENT_TYPE_DIAGNOSTICS_CHANGED = 1;
+    LANGUAGE_FEATURE_EVENT_TYPE_SEMANTIC_TOKENS_CHANGED = 2;
+  }
+  EventType type = 1;
+  code.ipc.file.Uri resource = 2;
+  uint64 version_id = 3;
+  repeated Diagnostic diagnostics = 4;   // Populated when type == DIAGNOSTICS_CHANGED
+  repeated uint32 semantic_tokens = 5;   // Populated when type == SEMANTIC_TOKENS_CHANGED
+}

@@ -1,0 +1,126 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create-release.outputs.id }}
+      upload_url: ${{ steps.create-release.outputs.upload_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          awk '/^## \[/ {if (p) exit; p=1} p' CHANGELOG.md | head -n 50 > RELEASE_NOTES.md
+
+      - name: Create Release
+        id: create-release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ steps.changelog.outputs.version }}
+          body_path: RELEASE_NOTES.md
+          draft: true
+          prerelease: false
+
+  build-release:
+    name: Build Release Artifacts
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: monaco-tauri
+            asset_name: monaco-tauri-linux-x86_64
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: monaco-tauri
+            asset_name: monaco-tauri-macos-x86_64
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: monaco-tauri
+            asset_name: monaco-tauri-macos-aarch64
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: monaco-tauri.exe
+            asset_name: monaco-tauri-windows-x86_64.exe
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies (Ubuntu)
+        if: contains(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
+      - name: Build Release
+        run: cd src-tauri && cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: matrix.platform != 'windows-latest'
+        run: |
+          cd src-tauri/target/${{ matrix.target }}/release
+          tar czf ../../../${{ matrix.asset_name }}.tar.gz ${{ matrix.artifact_name }}
+          cd ../../..
+
+      - name: Package (Windows)
+        if: matrix.platform == 'windows-latest'
+        run: |
+          cd src-tauri/target/${{ matrix.target }}/release
+          7z a ../../../${{ matrix.asset_name }}.zip ${{ matrix.artifact_name }}
+          cd ../../..
+
+      - name: Upload Release Asset (Unix)
+        if: matrix.platform != 'windows-latest'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./${{ matrix.asset_name }}.tar.gz
+          asset_name: ${{ matrix.asset_name }}.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload Release Asset (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./${{ matrix.asset_name }}.zip
+          asset_name: ${{ matrix.asset_name }}.zip
+          asset_content_type: application/zip

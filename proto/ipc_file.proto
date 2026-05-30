@@ -1,0 +1,147 @@
+syntax = "proto3";
+
+package code.ipc.file;
+
+import "ipc_envelope.proto";
+
+// File system operations that mirror IFileSystemProvider
+
+enum FileType {
+  FILE_TYPE_UNKNOWN = 0;
+  FILE_TYPE_FILE = 1;
+  FILE_TYPE_DIRECTORY = 2;
+  FILE_TYPE_SYMBOLIC_LINK = 3;
+}
+
+enum FileSystemProviderCapabilities {
+  FILE_SYSTEM_PROVIDER_CAPABILITIES_UNSPECIFIED = 0;
+  FILE_SYSTEM_PROVIDER_CAPABILITIES_FILE_READ_WRITE = 1;
+  FILE_SYSTEM_PROVIDER_CAPABILITIES_FILE_OPEN_TREE = 2;
+  FILE_SYSTEM_PROVIDER_CAPABILITIES_READONLY = 4;
+  FILE_SYSTEM_PROVIDER_CAPABILITIES_TRASH = 8;
+  FILE_SYSTEM_PROVIDER_CAPABILITIES_PATH_CASE_SENSITIVE = 16;
+}
+
+message Uri {
+  string scheme = 1;
+  string authority = 2;
+  string path = 3;
+  string query = 4;
+  string fragment = 5;
+}
+
+message FileStat {
+  Uri resource = 1;
+  bool is_directory = 2;
+  bool is_symbolic_link = 3;
+  int64 size = 4;
+  int64 mtime = 5;
+  int64 ctime = 6;
+  string etag = 7;
+  repeated FileStat children = 8;
+  FileType type = 9;
+}
+
+// --- Requests ---
+
+message ReadFileRequest {
+  Uri resource = 1;
+  bool allow_binary = 2;
+}
+
+message WriteFileRequest {
+  Uri resource = 1;
+  bytes content = 2;
+  bool create = 3;
+  bool overwrite = 4;
+  int64 mtime = 5;
+  string etag = 6;
+}
+
+message DeleteRequest {
+  Uri resource = 1;
+  bool recursive = 2;
+  bool use_trash = 3;
+}
+
+message RenameRequest {
+  Uri source = 1;
+  Uri target = 2;
+  bool overwrite = 3;
+}
+
+message StatRequest {
+  Uri resource = 1;
+}
+
+message ReaddirRequest {
+  Uri resource = 1;
+}
+
+message WatchRequest {
+  Uri resource = 1;
+  int32 options = 2;
+  bool recursive = 3;
+  repeated string excludes = 4;
+}
+
+message UnwatchRequest {
+  int32 watcher_id = 1;
+}
+
+message MkdirRequest {
+  Uri resource = 1;
+  bool recursive = 2;
+}
+
+// --- Responses ---
+
+message ReadFileResponse {
+  bytes content = 1;
+  string encoding = 2;
+  int64 mtime = 3;
+  string etag = 4;
+}
+
+message WriteFileResponse {
+  FileStat stat = 1;
+}
+
+message DeleteResponse {
+  bool success = 1;
+}
+
+message RenameResponse {
+  FileStat stat = 1;
+}
+
+message StatResponse {
+  FileStat stat = 1;
+}
+
+message ReaddirResponse {
+  repeated FileStat entries = 1;
+}
+
+message WatchResponse {
+  int32 watcher_id = 1;
+}
+
+message UnwatchResponse {
+  bool success = 1;
+}
+
+message MkdirResponse {
+  FileStat stat = 1;
+}
+
+// --- Events ---
+
+message FileChangeEvent {
+  Uri resource = 1;
+  int32 change_type = 2; // 1=added, 2=deleted, 3=updated
+}
+
+message FileChangesEvent {
+  repeated FileChangeEvent changes = 1;
+}

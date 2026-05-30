@@ -1,0 +1,166 @@
+syntax = "proto3";
+
+package code.ipc.editor;
+
+import "ipc_file.proto";
+
+// Editor buffer and text-model operations that mirror Monaco's ITextModel
+// and IMirrorTextModel event signatures. These ride inside the IpcRequest/
+// IpcResponse envelope as payload bytes.
+
+// ---------------------------------------------------------------------------
+// Core model types
+// ---------------------------------------------------------------------------
+
+message ModelContentChange {
+  uint32 start_line = 1;
+  uint32 start_column = 2;
+  uint32 end_line = 3;
+  uint32 end_column = 4;
+  uint64 range_offset = 5;
+  uint64 range_length = 6;
+  bytes text_utf8 = 7;       // Raw bytes to skip UTF-16 round-trip at WASM boundary
+}
+
+message ModelContentChangedEvent {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+  bool is_flush = 3;
+  bool is_undoing = 4;
+  bool is_redoing = 5;
+  repeated ModelContentChange changes = 6;
+}
+
+message BufferSnapshot {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+  bytes content_utf8 = 3;
+  string eol = 4;            // "\n" | "\r\n" | "\r"
+  bool is_dirty = 5;
+}
+
+message Selection {
+  uint32 start_line = 1;
+  uint32 start_column = 2;
+  uint32 end_line = 3;
+  uint32 end_column = 4;
+  bool is_reversed = 5;
+}
+
+message CursorState {
+  code.ipc.file.Uri resource = 1;
+  repeated Selection selections = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Requests
+// ---------------------------------------------------------------------------
+
+message OpenBufferRequest {
+  code.ipc.file.Uri resource = 1;
+  bytes initial_content_utf8 = 2;
+  string language_id = 3;
+}
+
+message CloseBufferRequest {
+  code.ipc.file.Uri resource = 1;
+  bool save_if_dirty = 2;
+}
+
+message ApplyEditsRequest {
+  code.ipc.file.Uri resource = 1;
+  repeated ModelContentChange edits = 2;
+}
+
+message GetSnapshotRequest {
+  code.ipc.file.Uri resource = 1;
+  uint64 at_version_id = 2;  // 0 = latest
+}
+
+message SetCursorRequest {
+  CursorState cursor = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Responses
+// ---------------------------------------------------------------------------
+
+message OpenBufferResponse {
+  bool success = 1;
+  uint64 initial_version_id = 2;
+}
+
+message ApplyEditsResponse {
+  bool success = 1;
+  uint64 new_version_id = 2;
+  ModelContentChangedEvent applied_event = 3;
+}
+
+message GetSnapshotResponse {
+  BufferSnapshot snapshot = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Delta and state types for text buffer synchronization
+// ---------------------------------------------------------------------------
+
+// Metadata describing a text buffer's current state.
+// Mirrors Monaco's internal text model metadata.
+message TextBuffer {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+  uint64 alternative_version_id = 3;
+  uint32 line_count = 4;
+  uint64 byte_length = 5;
+  string language_id = 6;
+  string eol = 7;           // "\n" | "\r\n"
+  bool is_dirty = 8;
+  bool has_undo = 9;
+  bool has_redo = 10;
+}
+
+// Lightweight delta for incremental text synchronization.
+// Carries a single atomic edit from a known version boundary.
+message TextBufferDelta {
+  uint64 from_version_id = 1;
+  uint64 to_version_id = 2;
+  ModelContentChange change = 3;
+  bool is_flush = 4;        // true when delta represents a full content replacement
+}
+
+// Undo/redo stack state, suitable for persistence or inspection.
+message UndoRedoState {
+  message UndoStackEntry {
+    oneof entry_type {
+      string inserted_text = 1;       // Text that was inserted (undo = delete it)
+      string deleted_text = 2;        // Text that was deleted (undo = re-insert it)
+    }
+    uint64 offset = 3;
+    uint64 length = 4;
+    uint32 start_line = 5;
+    uint32 start_column = 6;
+  }
+
+  repeated UndoStackEntry undo_stack = 1;
+  repeated UndoStackEntry redo_stack = 2;
+  uint32 max_size = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Push events (carried in IpcEvent envelope)
+// ---------------------------------------------------------------------------
+
+message BufferRegistryEvent {
+  enum EventType {
+    BUFFER_EVENT_TYPE_UNSPECIFIED = 0;
+    BUFFER_EVENT_TYPE_OPENED = 1;
+    BUFFER_EVENT_TYPE_CLOSED = 2;
+    BUFFER_EVENT_TYPE_CHANGED = 3;
+    BUFFER_EVENT_TYPE_SAVED = 4;
+    BUFFER_EVENT_TYPE_RENAMED = 5;
+  }
+  EventType type = 1;
+  code.ipc.file.Uri resource = 2;
+  uint64 version_id = 3;
+  ModelContentChangedEvent change_event = 4; // Populated when type == CHANGED
+}

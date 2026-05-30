@@ -1,0 +1,176 @@
+syntax = "proto3";
+
+package code.ipc.editor.host;
+
+import "ipc_editor.proto";
+import "ipc_file.proto";
+
+// Monaco shell <-> native host operations.
+// These messages sit one layer above raw file provider verbs and capture the
+// editor-facing actions the standalone Tauri shell actually needs first:
+// workspace roots, open document, save document, and save-as.
+
+message WorkspaceRoot {
+  code.ipc.file.Uri resource = 1;
+  string name = 2;
+  bool is_primary = 3;
+}
+
+message GetWorkspaceRootsRequest {}
+
+message GetWorkspaceRootsResponse {
+  repeated WorkspaceRoot roots = 1;
+}
+
+message SetPrimaryWorkspaceRootRequest {
+  code.ipc.file.Uri resource = 1;
+}
+
+message SetPrimaryWorkspaceRootResponse {
+  WorkspaceRoot root = 1;
+}
+
+message OpenDocumentRequest {
+  code.ipc.file.Uri resource = 1;
+  bool create_if_missing = 2;
+  string preferred_language_id = 3;
+}
+
+message OpenDocumentResponse {
+  code.ipc.editor.BufferSnapshot snapshot = 1;
+  code.ipc.file.FileStat stat = 2;
+  string language_id = 3;
+  bool created = 4;
+}
+
+message SaveDocumentRequest {
+  code.ipc.editor.BufferSnapshot snapshot = 1;
+  bool create = 2;
+  bool overwrite = 3;
+  string etag = 4;
+}
+
+message SaveDocumentResponse {
+  code.ipc.file.FileStat stat = 1;
+  uint64 persisted_version_id = 2;
+}
+
+message SaveDocumentAsRequest {
+  code.ipc.editor.BufferSnapshot snapshot = 1;
+  code.ipc.file.Uri target = 2;
+  bool overwrite = 3;
+}
+
+message SaveDocumentAsResponse {
+  code.ipc.editor.BufferSnapshot snapshot = 1;
+  code.ipc.file.FileStat stat = 2;
+  bool source_closed = 3;
+}
+
+message ListDirectoryRequest {
+  code.ipc.file.Uri resource = 1;
+  bool include_file_stats = 2;
+}
+
+message DirectoryEntry {
+  string name = 1;
+  code.ipc.file.FileStat stat = 2;
+}
+
+message ListDirectoryResponse {
+  code.ipc.file.Uri resource = 1;
+  repeated DirectoryEntry entries = 2;
+}
+
+// --- Buffer Operations ---
+
+message CloseDocumentRequest {
+  code.ipc.file.Uri resource = 1;
+  bool save_if_dirty = 2;
+}
+
+message CloseDocumentResponse {
+  bool closed = 1;
+  bool was_dirty = 2;
+}
+
+message ApplyEditsRequest {
+  code.ipc.file.Uri resource = 1;
+  repeated code.ipc.editor.ModelContentChange edits = 2;
+}
+
+message ApplyEditsResponse {
+  bool success = 1;
+  uint64 new_version_id = 2;
+  code.ipc.editor.ModelContentChangedEvent applied_event = 3;
+}
+
+message GetBufferSnapshotRequest {
+  code.ipc.file.Uri resource = 1;
+  uint64 at_version_id = 2; // 0 = latest
+}
+
+message GetBufferSnapshotResponse {
+  code.ipc.editor.BufferSnapshot snapshot = 1;
+}
+
+message UndoRequest {
+  code.ipc.file.Uri resource = 1;
+}
+
+message UndoResponse {
+  bool success = 1;
+  uint64 version_id = 2;
+  repeated code.ipc.editor.ModelContentChange changes = 3;
+}
+
+message RedoRequest {
+  code.ipc.file.Uri resource = 1;
+}
+
+message RedoResponse {
+  bool success = 1;
+  uint64 version_id = 2;
+  repeated code.ipc.editor.ModelContentChange changes = 3;
+}
+
+message EditorHostEvent {
+  enum EventType {
+    EDITOR_HOST_EVENT_TYPE_UNSPECIFIED = 0;
+    EDITOR_HOST_EVENT_TYPE_WORKSPACE_ROOTS_CHANGED = 1;
+    EDITOR_HOST_EVENT_TYPE_DOCUMENT_SAVED = 2;
+    EDITOR_HOST_EVENT_TYPE_DOCUMENT_RENAMED = 3;
+    EDITOR_HOST_EVENT_TYPE_DOCUMENT_CLOSED = 4;
+  }
+
+  EventType type = 1;
+  repeated WorkspaceRoot roots = 2;
+  code.ipc.editor.BufferSnapshot snapshot = 3;
+  code.ipc.file.FileStat stat = 4;
+  code.ipc.file.Uri previous_resource = 5;
+}
+
+// --- Buffer Registry Events (for multi-view sync and agent-driven editing) ---
+
+message BufferContentChangeEvent {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+  repeated code.ipc.editor.ModelContentChange changes = 3;
+  bool is_undoing = 4;
+  bool is_redoing = 5;
+}
+
+message BufferRegistryEvent {
+  enum EventType {
+    BUFFER_REGISTRY_EVENT_TYPE_UNSPECIFIED = 0;
+    BUFFER_REGISTRY_EVENT_TYPE_CONTENT_CHANGED = 1;
+    BUFFER_REGISTRY_EVENT_TYPE_BUFFER_OPENED = 2;
+    BUFFER_REGISTRY_EVENT_TYPE_BUFFER_CLOSED = 3;
+    BUFFER_REGISTRY_EVENT_TYPE_BUFFER_SAVED = 4;
+  }
+
+  EventType type = 1;
+  code.ipc.file.Uri resource = 2;
+  uint64 version_id = 3;
+  BufferContentChangeEvent content_change = 4;
+}
