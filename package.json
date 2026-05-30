@@ -1,58 +1,30 @@
 {
-	"name": "monaco-editor",
-	"version": "0.55.1",
-	"vscodeRef": "86f5a62f058e3905f74a9fa65d04b2f3b533408e",
+	"name": "monaco-rust",
+	"version": "0.1.0",
 	"private": true,
-	"description": "A browser based code editor",
-	"homepage": "https://github.com/microsoft/monaco-editor",
-	"author": "Microsoft Corporation",
+	"description": "Monaco Editor + Tauri + WASM — a native code editor with hybrid compute architecture",
+	"homepage": "https://github.com/solshaskie/Monaco_Rust",
+	"author": "solshaskie",
 	"license": "MIT",
 	"scripts": {
-		"import-typescript": "ts-node ./build/importTypescript",
-		"postinstall": "ts-node ./build/postinstall",
 		"prettier-check": "prettier --check .",
 		"prettier": "prettier --write .",
-		"pretty-quick": "pretty-quick --staged",
-		"simpleserver": "ts-node ./build/simpleserver",
-		"package-for-smoketest": "npm run package-for-smoketest-webpack && npm run package-for-smoketest-esbuild && npm run package-for-smoketest-vite",
-		"package-for-smoketest-webpack": "ts-node ./test/smoke/package-webpack",
-		"package-for-smoketest-webpack-cross-origin": "ts-node ./test/smoke/package-webpack --cross-origin",
-		"package-for-smoketest-esbuild": "ts-node ./test/smoke/package-esbuild",
-		"package-for-smoketest-vite": "ts-node ./test/smoke/package-vite",
-		"smoketest": "playwright test --config=test/smoke/playwright.config.ts",
-		"smoketest-debug": "playwright test --config=test/smoke/playwright.config.ts --debug",
-		"smoketest-ui": "playwright test --config=test/smoke/playwright.config.ts --ui",
-		"smoketest-headed": "playwright test --config=test/smoke/playwright.config.ts --headed",
-		"test": "ts-node ./build/check-samples && npm run test:grammars",
-		"test:grammars": "node --import tsx --import ./test/test-setup.mjs --test \"src/languages/definitions/*/*.test.ts\"",
-		"deps-all-remove": "ts-node ./build/npm/removeAll",
-		"deps-all-install": "ts-node ./build/npm/installAll",
-		"update-actions": "pin-github-action ./.github/workflows/website.yml",
-		"watch": "tsc -w -p ./src",
-		"build-all": "npm run build-lsp && npm run build-monaco-editor && npm run package-for-smoketest",
-		"build": "npm run build-lsp && npm run build-monaco-editor",
-		"build-monaco-editor": "ts-node ./build/build-monaco-editor",
 		"build-lsp": "cd monaco-lsp-client && npm install && npm run build",
+		"build-wasm": "ts-node ./build/wasm/build.script.ts",
 		"tauri:prepare": "node ./scripts/prepare-tauri-dist.mjs",
 		"tauri:pack": "node ./scripts/package-tauri-artifact.mjs",
 		"tauri:dev": "npm run tauri:prepare && cargo tauri dev --config src-tauri/tauri.conf.json",
-		"tauri:build": "npm run tauri:prepare && cargo tauri build --config src-tauri/tauri.conf.json"
+		"tauri:build": "npm run tauri:prepare && cargo tauri build --config src-tauri/tauri.conf.json",
+		"test:rust": "cd src-tauri && cargo test --all-targets",
+		"test:wasm": "cd wasm && cargo test",
+		"test:e2e": "playwright test --config=test/e2e/playwright.config.ts"
 	},
-	"typings": "./esm/vs/editor/editor.main.d.ts",
-	"main": "./min/vs/editor/editor.main.js",
-	"module": "./esm/vs/editor/editor.main.js",
-	"exports": {
-		".": {
-			"types": "./esm/vs/index.d.ts",
-			"import": "./esm/vs/index.js",
-			"require": "./min/vs/index.js"
-		},
-		"./*.js": "./esm/vs/*.js",
-		"./*": "./esm/vs/*.js"
+	"dependencies": {
+		"monaco-editor": "0.55.1"
 	},
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/microsoft/monaco-editor"
+		"url": "https://github.com/solshaskie/Monaco_Rust"
 	},
 	"devDependencies": {
 		"@playwright/test": "^1.56.1",
@@ -106,5 +78,8 @@
 	"alias": {
 		"process": false,
 		"buffer": false
+	},
+	"dependencies": {
+		"monaco-editor": "0.55.1"
 	}
 }

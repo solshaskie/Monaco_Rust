@@ -2,13 +2,13 @@ import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
 const root = process.cwd();
-const monacoOutDir = path.join(root, 'out', 'monaco-editor');
-const minDir = path.join(monacoOutDir, 'min');
+const monacoNpmDir = path.join(root, 'node_modules', 'monaco-editor');
+const minDir = path.join(monacoNpmDir, 'min');
 const distDir = path.join(root, 'tauri-dist');
 const vendorDir = path.join(distDir, 'vendor', 'monaco-editor');
 
 if (!existsSync(minDir)) {
-  console.error('Missing ./out/monaco-editor/min build output. Run npm run build-lsp && npm run build-monaco-editor before Tauri packaging.');
+  console.error('Missing node_modules/monaco-editor/min. Run npm install before Tauri packaging.');
   process.exit(1);
 }
 
