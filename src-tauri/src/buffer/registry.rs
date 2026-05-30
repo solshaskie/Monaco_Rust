@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn registry_open_buffer() {
         let mut registry = BufferRegistry::new();
-        let buffer = registry.open_buffer("test://file.txt".to_string(), "hello");
+        let _buffer = registry.open_buffer("test://file.txt".to_string(), "hello");
 
         assert!(registry.has_buffer("test://file.txt"));
         assert_eq!(registry.buffer_count(), 1);
@@ -264,8 +264,8 @@ mod tests {
     #[test]
     fn registry_open_existing_buffer() {
         let mut registry = BufferRegistry::new();
-        let buffer1 = registry.open_buffer("test://file.txt".to_string(), "hello");
-        let buffer2 = registry.open_buffer("test://file.txt".to_string(), "world");
+        let _buffer1 = registry.open_buffer("test://file.txt".to_string(), "hello");
+        let _buffer2 = registry.open_buffer("test://file.txt".to_string(), "world");
 
         // Should return the same buffer, not create a new one
         assert_eq!(registry.buffer_count(), 1);

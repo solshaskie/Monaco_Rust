@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.local.monaco.prototype",
   "build": {
-    "beforeBuildCommand": "node ./scripts/prepare-tauri-dist.mjs",
+    "beforeBuildCommand": "bash ./scripts/prepare-tauri-dist.sh",
     "frontendDist": "../tauri-dist"
   },
   "app": {

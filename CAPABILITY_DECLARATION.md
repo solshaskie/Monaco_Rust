@@ -1,0 +1,181 @@
+# Capability Declaration
+
+## Purpose
+
+This document is Monaco_Rust's sovereign announcement to adjacent projects.
+
+It states, plainly and without product costume, what this asset brings to the table now.
+
+It is not a roadmap.
+It is not a wish list.
+It is a declaration of available posture, available seams, and intended contribution.
+
+## Identity
+
+Monaco_Rust is a local-first editing and truth-surface substrate.
+
+It is built to take the veteran strengths of Monaco and rehouse them inside a sovereign Rust/Tauri runtime that can be shaped for governed local work rather than inherited platform assumptions.
+
+Monaco_Rust does not claim to be the whole workspace organism.
+It claims to be a disciplined surface and runtime seam for exact text, exact state, exact structure, and higher-order integration.
+
+## What Monaco_Rust Brings
+
+### 1. A Sovereign Local Editor Runtime
+
+Monaco_Rust brings an editor/runtime posture where authoritative state does not live in an opaque browser/tooling stack.
+
+It owns locally:
+
+- buffer state
+- file I/O
+- edit application
+- version tracking
+- undo/redo
+- snapshot retrieval
+
+This makes it useful wherever another project needs a precise human-facing editing surface backed by governed local authority.
+
+### 2. Explicit Contracts Instead of Hidden Coupling
+
+Monaco_Rust brings explicit protobuf contracts for editor, host, file, language, and event surfaces.
+
+That means adjacent projects can integrate with it through known shapes instead of accidental internal assumptions.
+
+It is suitable for projects that value:
+
+- schema clarity
+- replayable state transitions
+- stable transport boundaries
+- inspectable message surfaces
+
+### 3. A Human-Facing Surface for Truth Work
+
+Monaco_Rust brings more than raw editing.
+
+It brings a place where exact source state, exact structure, exact diagnostics, and exact events can be surfaced to a human without collapsing them into summary-only views.
+
+That makes it a strong candidate surface for:
+
+- review overlays
+- contradiction overlays
+- semantic drift warnings
+- lineage and provenance views
+- exact diff and symbol inspection
+
+### 4. A Host for Semantic Organs
+
+Monaco_Rust does not need to own every higher capability itself.
+
+What it brings is a strong host seam for semantic organs supplied by adjacent systems.
+
+Examples of what can be invited in:
+
+- Relatent-style semantic indexing
+- stable symbol identity
+- drift analysis
+- structural review
+- contradiction detection
+- proof and uncertainty overlays
+
+Its role in that relationship is not to become those systems.
+Its role is to give them a sovereign local surface in which to appear, interact, and be governed.
+
+### 5. Agent-Facing Capability Seams
+
+Monaco_Rust brings a bounded MCP-style tool surface for agent-driven editing and inspection.
+
+Current agent-facing capabilities include:
+
+- `read_file`
+- `edit_file`
+- `list_symbols`
+- `apply_edits`
+- `get_buffer_metadata`
+- `get_buffer_snapshot_proof`
+- `get_symbol_index`
+- `get_symbol_at_position`
+- `get_buffer_version_lineage`
+
+These are meaningful because they operate against the same authoritative runtime state as the UI, not a parallel shadow layer.
+
+### 6. Evented Multi-View State
+
+Monaco_Rust brings shared buffer state with event broadcasting.
+
+That makes it suitable for futures where:
+
+- multiple views observe the same file
+- external semantic/runtime processes report changes back into the surface
+- agent actions need visible synchronization instead of hidden mutation
+
+### 7. Emancipated Local Build Posture
+
+Monaco_Rust brings a build/runtime posture that is no longer ruled by Node-era project tooling.
+
+The repo now stands on:
+
+- Rust/Tauri runtime ownership
+- checked-in browser assets
+- shell-based dist preparation
+- shell-based artifact packaging
+- shell-based WASM rebuild flow
+
+That matters because it reduces inherited constraint and makes the asset easier to reshape around purpose.
+
+## What Monaco_Rust Does Not Claim
+
+Monaco_Rust does not claim:
+
+- to be a complete IDE replacement today
+- to be the sovereign workspace authority for every project concern
+- to replace semantic systems like Relatent
+- to replace reasoning systems like RLM
+- to be the final truth engine by itself
+
+It is a surface and runtime substrate.
+Its strength is in being exact, governable, and open to purposeful integration.
+
+## Best-Fit Role in the Project Vault
+
+Monaco_Rust is best understood as:
+
+- the sovereign editor/runtime surface
+- the local cockpit glass for exact text and exact structure
+- the host for semantic and reasoning organs supplied by adjacent projects
+
+In that vault-wide role split:
+
+- local runtimes present truth
+- reasoning systems range over truth
+- semantic systems classify and relate truth
+- Monaco_Rust provides the precise human-facing place where those results can be seen and acted on
+
+## Integration Posture
+
+Projects should approach Monaco_Rust as:
+
+- a hostable local editing surface
+- a contract-bearing runtime seam
+- a candidate truth workstation front-end
+- a component that can be shaped without inherited VS Code product assumptions
+
+The strongest integrations will preserve this rule:
+
+Monaco_Rust should remain the sovereign surface for local edit/state presentation, while external systems contribute interpretation, analysis, or reasoning through explicit, inspectable seams.
+
+## Declaration
+
+Monaco_Rust is available as a sovereign local capability.
+
+It brings:
+
+- exact editing
+- exact state
+- explicit contracts
+- evented runtime truth
+- agent-facing seams
+- a strong surface for semantic and reasoning augmentation
+
+It is not asking to inherit the old world.
+It is announcing readiness to serve a new one.

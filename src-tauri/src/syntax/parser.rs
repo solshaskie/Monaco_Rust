@@ -3,7 +3,6 @@ use tree_sitter::{Language, Parser, Tree};
 /// A syntax parser that can parse source code using Tree-sitter grammars.
 pub struct SyntaxParser {
     parser: Parser,
-    language: Language,
 }
 
 /// The result of parsing a source file.
@@ -33,7 +32,7 @@ impl SyntaxParser {
         parser
             .set_language(&language)
             .map_err(|e| format!("Failed to set {} language: {}", name, e))?;
-        Ok(Self { parser, language })
+        Ok(Self { parser })
     }
 
     /// Parses the given source code and returns the syntax tree.

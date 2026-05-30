@@ -519,7 +519,7 @@ impl TextBuffer {
                 let text_byte_len = position.text.len();
                 let end_offset = start_offset + text_byte_len;
 
-                let deleted_text = self.rope.get_slice(start_offset..end_offset)?.to_string();
+                let _deleted_text = self.rope.get_slice(start_offset..end_offset)?.to_string();
                 self.rope.remove(start_offset..end_offset);
 
                 // Rebuild line index

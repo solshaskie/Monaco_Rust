@@ -41,7 +41,7 @@ This roadmap breaks those deferred items into focused, actionable phases.
 - [x] Implement `SharedArrayBuffer`-backed text slice for zero-copy JS ↔ WASM passing
 - [ ] Pre-allocate linear memory for large files (pre-grow WASM memory to avoid reallocation stalls)
 - [ ] Evaluate `memory64` proposal for buffers >4GB
-- [x] Build pipeline: integrate `wasm-pack` into the build script (`build/wasm/build.script.ts`)
+- [x] Build pipeline: shell-based WASM rebuild path exists in `build/wasm/build.sh`
 - [x] Load `.wasm` module in the frontend and expose compute functions via `wasm-bindgen`
 
 **Success Criteria:**
@@ -194,7 +194,7 @@ This roadmap breaks those deferred items into focused, actionable phases.
 **New files:** `.github/workflows/build.yml`
 
 - [x] Build Tauri app for Linux (x86_64, aarch64), macOS (x86_64, Apple Silicon), Windows (x64)
-- [x] Cache `cargo` and `node_modules` for sub-5min builds
+- [x] Cache `cargo` artifacts for fast rebuilds
 - [ ] Run full test suite (unit + integration + e2e) on each platform
 - [ ] Produce signed artifacts for nightly releases
 

@@ -1034,6 +1034,10 @@ struct ExecuteMcpToolResponse {
     content: String,
     version_id: u64,
     error: Option<String>,
+    certainty: Option<monaco_tauri::mcp::McpCertainty>,
+    provenance: Option<monaco_tauri::mcp::McpResultProvenance>,
+    evidence: Option<serde_json::Value>,
+    data: Option<serde_json::Value>,
 }
 
 #[tauri::command]
@@ -1054,6 +1058,10 @@ fn execute_mcp_tool(
         content: result.content,
         version_id: result.version_id,
         error: result.error,
+        certainty: result.certainty,
+        provenance: result.provenance,
+        evidence: result.evidence,
+        data: result.data,
     })
 }
 

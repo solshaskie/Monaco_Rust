@@ -106,7 +106,6 @@ pub fn build_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::buffer::TextBuffer;
 
     fn make_registry_with(content: &str) -> BufferRegistry {
         let mut reg = BufferRegistry::new();

@@ -1,4 +1,4 @@
-use tree_sitter::{Node, Tree, TreeCursor};
+use tree_sitter::{Tree, TreeCursor};
 
 /// A syntax token representing a span of text with a classified token type.
 #[derive(Debug, Clone, PartialEq)]
@@ -23,14 +23,11 @@ fn node_kind_to_token_type(kind: &str) -> Option<&'static str> {
 
         // JavaScript / TypeScript keywords
         "function" | "class" | "extends" | "import" | "export" | "from"
-        | "var" | "let" | "const" | "if" | "else" | "switch" | "case" | "default"
-        | "for" | "while" | "do" | "break" | "continue" | "return" | "try"
-        | "catch" | "finally" | "throw" | "new" | "this" | "typeof" | "instanceof"
-        | "void" | "delete" | "yield" | "async" | "await" | "debugger"
-        | "with" | "get" | "set" | "of" | "interface" | "type" | "enum"
-        | "namespace" | "module" | "declare" | "abstract" | "implements"
-        | "public" | "private" | "protected" | "readonly" | "override"
-        | "static" | "super" => Some("keyword"),
+        | "var" | "switch" | "case" | "default" | "do" | "catch" | "finally"
+        | "throw" | "new" | "this" | "typeof" | "instanceof" | "void" | "delete"
+        | "debugger" | "with" | "get" | "set" | "of" | "interface" | "namespace"
+        | "module" | "declare" | "abstract" | "implements" | "public" | "private"
+        | "protected" | "readonly" | "override" => Some("keyword"),
 
         // Identifiers
         "identifier" | "type_identifier" | "field_identifier"
@@ -55,8 +52,7 @@ fn node_kind_to_token_type(kind: &str) -> Option<&'static str> {
         | ">" | "&&" | "||" | "==" | "!=" | "<=" | ">=" | "<<" | ">>" | "+="
         | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | "=>"
         | "->" | ".." | "..=" | "::" | "??" | "?." | "**" | "++" | "--"
-        | "===" | "!==" | "||=" | "&&=" | "??=" | "!" | "&"
-        | "|" | "^" | "~" | "<<" | ">>" | "<<<" | ">>>" => Some("operator"),
+        | "===" | "!==" | "||=" | "&&=" | "??=" | "<<<" | ">>>" => Some("operator"),
 
         // Delimiters
         "(" | ")" | "{" | "}" | "[" | "]" | ";" | "," | "." => Some("delimiter"),
@@ -114,7 +110,6 @@ fn traverse_tree(cursor: &mut TreeCursor, source: &str, tokens: &mut Vec<SyntaxT
     // If this node has a token type mapping and is a leaf (or meaningful token),
     // record it. For leaf nodes, always try to map.
     // For named nodes that contain children, we recurse.
-    let is_named = node.is_named();
     let has_children = cursor.goto_first_child();
 
     if !has_children {

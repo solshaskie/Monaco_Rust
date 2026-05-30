@@ -65,6 +65,7 @@ pub fn compute_visible_lines(
 
 /// Compute the byte offset → screen position mapping for a single line.
 /// Returns `(column, line_in_wrap)` for a given byte offset within a line.
+#[allow(dead_code)]
 pub fn position_in_wrapped_line(line: &str, byte_offset: usize, line_width: usize) -> (usize, usize) {
     let col = line[..byte_offset.min(line.len())].chars().count();
     if line_width == 0 {

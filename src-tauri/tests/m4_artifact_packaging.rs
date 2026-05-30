@@ -10,8 +10,8 @@ fn tauri_artifact_tarball_contains_manifest_and_editor_assets() {
     let _ = fs::remove_dir_all(&out_dir);
     fs::create_dir_all(&out_dir).expect("create temp output dir");
 
-    let script = repo_root.join("scripts/package-tauri-artifact.mjs");
-    let status = Command::new("node")
+    let script = repo_root.join("scripts/package-tauri-artifact.sh");
+    let status = Command::new("bash")
         .arg(script)
         .arg("--out-dir")
         .arg(&out_dir)
@@ -20,7 +20,15 @@ fn tauri_artifact_tarball_contains_manifest_and_editor_assets() {
         .expect("run artifact packager");
     assert!(status.success(), "artifact packager should succeed");
 
-    let tarball = out_dir.join("monaco-tauri-artifact-v0.55.1.tar.gz");
+    let cargo_manifest =
+        fs::read_to_string(manifest_dir.join("Cargo.toml")).expect("read Cargo.toml");
+    let version = cargo_manifest
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("version = "))
+        .map(|value| value.trim_matches('"').to_string())
+        .expect("Cargo.toml version string");
+
+    let tarball = out_dir.join(format!("monaco-tauri-artifact-v{version}.tar.gz"));
     assert!(tarball.is_file(), "expected artifact tarball");
 
     let tar_output = Command::new("tar")

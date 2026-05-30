@@ -229,6 +229,8 @@ tree-sitter-typescript = "0.23"
 - [x] Support agent-driven file mutations (agent edits via `edit_file` tool with old_text/new_text)
 - [x] Implement optimistic locking for concurrent edits (`apply_edit_optimistic` in BufferRegistry with version checks)
 - [x] Add conflict resolution strategies (version conflict error returned to agent, agent retries with updated content)
+- [x] Extend the MCP seam into a truth-bearing surface with explicit certainty/provenance/evidence metadata
+- [x] Add exact buffer/symbol inspection tools (`get_buffer_metadata`, `get_buffer_snapshot_proof`, `get_symbol_index`, `get_symbol_at_position`, `get_buffer_version_lineage`)
 
 **Success Criteria:**
 - AI agents can modify files programmatically
