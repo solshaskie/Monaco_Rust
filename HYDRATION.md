@@ -70,7 +70,8 @@ Monaco_Rust is a local-first Monaco/Tauri editor experiment where Rust owns buff
 1. Run `cd src-tauri && cargo test --all-targets`.
 2. Read [PHASED_ROADMAP.md](./PHASED_ROADMAP.md) for the core build path.
 3. Read [WASM_ROADMAP.md](./WASM_ROADMAP.md) only if the task touches the deferred compute/rendering lane.
-4. Work from `src-tauri/src/` first if the task affects truth, state, events, syntax, or agent operations.
+4. Read [ADVERSARIAL_REVIEW.md](./ADVERSARIAL_REVIEW.md) and [ADVERSARIAL_ROADMAP.md](./ADVERSARIAL_ROADMAP.md) if the task touches security, performance, or correctness — these are now the authoritative bug and remediation trackers.
+5. Work from `src-tauri/src/` first if the task affects truth, state, events, syntax, or agent operations.
 
 ## Near-Term Risks
 

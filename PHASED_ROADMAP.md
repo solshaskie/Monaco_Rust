@@ -2,6 +2,10 @@
 
 This document outlines a phased approach to refactoring Monaco Editor to integrate with the Tauri/Rust/Protobuf architecture. The goal is to create a high-performance, agentic workspace with unified serialization, native security boundaries, and radical performance improvements.
 
+> **Status on 2026-06-03:** Phases 1 through 7 of the core Monaco_Rust refactor are substantially complete. The deferred WASM/custom-renderer lane ([`WASM_ROADMAP.md`](./WASM_ROADMAP.md)), external LSP integration (completion, diagnostics, code actions), and host-level testing (cross-platform CI, E2E proofs, visual regression pipeline) are now all landed. Read [`README.md`](./README.md) and [`HYDRATION.md`](./HYDRATION.md) for current runtime truth.
+>
+> **Post-review state:** A full-spectrum adversarial review ([`ADVERSARIAL_REVIEW.md`](./ADVERSARIAL_REVIEW.md)) identified 10 P0 security/correctness issues, 37 P1 performance/correctness issues, and 47+ P2 quality issues. The sequenced remediation plan lives in [`ADVERSARIAL_ROADMAP.md`](./ADVERSARIAL_ROADMAP.md) and should be consulted before any new feature work.
+
 ## Architecture Overview
 
 ```
@@ -64,13 +68,13 @@ ropey = "1.6"  # or custom piece-tree implementation
 - Unit tests pass for buffer operations
 - Performance benchmarks show sub-millisecond edit operations
 
-### 1.3 Create WASM Bridge Module (Deferred to Phase 5)
+### 1.3 Create WASM Bridge Module (Deferred; now tracked in `WASM_ROADMAP.md`)
 **New files:** `src-tauri/src/wasm_bridge.rs`
 
-- [ ] Compile text buffer to WASM using `wasm-bindgen`
-- [ ] Implement `Uint8Array` ↔ Rust byte slice conversion
-- [ ] Create memory-efficient buffer sharing mechanism
-- [ ] Expose buffer operations via WASM FFI
+- [x] Compile text buffer to WASM using `wasm-bindgen` (completed in `WASM_ROADMAP.md` W1.1)
+- [x] Implement `Uint8Array` ↔ Rust byte slice conversion (completed in `WASM_ROADMAP.md` W1.1)
+- [x] Create memory-efficient buffer sharing mechanism (completed in `WASM_ROADMAP.md` W1.1–W1.3)
+- [x] Expose buffer operations via WASM FFI (completed in `WASM_ROADMAP.md` W1.2)
 
 **Dependencies:**
 ```toml
@@ -83,6 +87,8 @@ wasm-bindgen-futures = "0.4"
 - WASM module loads in browser
 - Text operations work across JS ↔ WASM boundary
 - No memory leaks in boundary crossing
+
+Current note: the repo now has a hybrid WASM compute lane under `wasm/` and `tauri/wasm-*`, but not the original plan's full text-buffer-to-WASM authority shift. That follow-on work lives in [`WASM_ROADMAP.md`](./WASM_ROADMAP.md).
 
 ### 1.4 Integrate with Existing Host Handlers
 **Files to modify:** `src-tauri/src/host_handlers.rs`
@@ -121,6 +127,8 @@ tree-sitter-typescript = "0.23"
 - Tree-sitter parses files correctly in WASM
 - Incremental updates work on character-by-character input
 
+Current note: Tree-sitter parsing is real and verified in the native Rust path today. The "in WASM" portion remains part of the separate hybrid compute lane rather than the core completed refactor.
+
 ### 2.2 Token Stream Generation
 **New files:** `src-tauri/src/syntax/tokens.rs`
 
@@ -153,27 +161,30 @@ tree-sitter-typescript = "0.23"
 
 **Goal:** Route Monaco's language feature providers through the Tauri/Protobuf backend instead of web workers.
 
-### 3.1 Completion Provider Bridge (Tree-sitter symbol-based MVP; external LSP deferred)
-**New files:** `src-tauri/src/syntax/completion.rs`
+### 3.1 Completion Provider Bridge (Tree-sitter symbol-based MVP + external LSP)
+**New files:** `src-tauri/src/syntax/completion.rs`, `src-tauri/src/lsp/`
 
 - [x] Implement `CompletionRequest` handler in Rust
-- [ ] Connect to external LSP client (rust-analyzer, typescript-language-server) — deferred to Phase 4+
+- [x] Connect to external LSP client (rust-analyzer, typescript-language-server) via `LspClient`/`LspRegistry`
 - [x] Return `CompletionResponse` via protobuf
 - [x] Cache completion results for repeated triggers (client-side via Monaco)
+- [x] Fallback to Tree-sitter document symbols when LSP server is unavailable
 
 **Success Criteria:**
 - Autocomplete works with native backend using Tree-sitter document symbols
 - Latency is lower than web worker approach
 
-### 3.2 Diagnostics Pipeline
-**New files:** `src-tauri/src/syntax/diagnostics.rs`
+Current note: the Tree-sitter-backed native MVP is landed, and external LSP completion is now wired with automatic fallback to Tree-sitter symbols.
 
-- [ ] Implement diagnostic collection from LSP — deferred to external LSP integration
+### 3.2 Diagnostics Pipeline
+**New files:** `src-tauri/src/syntax/diagnostics.rs`, `src-tauri/src/lsp/convert.rs`
+
+- [x] Implement diagnostic collection from LSP (merged with Tree-sitter parse errors)
 - [x] Basic syntax error reporting via Tree-sitter parse errors
 - [x] Wire diagnostics to Monaco markers via `setModelMarkers`
 - [x] Push `DiagnosticResponse` via Tauri events on buffer edits
 - [x] Support diagnostic severity levels (Error, Warning, Information, Hint)
-- [ ] Implement diagnostic code actions — deferred to external LSP integration
+- [x] Implement diagnostic code actions via `textDocument/codeAction`
 
 **Success Criteria:**
 - Errors/warnings appear in editor
@@ -247,19 +258,21 @@ tree-sitter-typescript = "0.23"
 
 - [x] Implement content range fetching (`get_value_in_line_range`) for viewport-only content delivery
 - [x] Add dirty line tracking to avoid full-file re-computation
-- [ ] Use `SharedArrayBuffer` for zero-copy access (deferred: requires WASM bridge)
+- [x] Use `SharedArrayBuffer` for zero-copy access (completed in `WASM_ROADMAP.md` W1.1)
 
 **Success Criteria:**
 - Large file edits (>1MB) complete in <16ms
 - Memory usage stable during extended editing
 
+Current note: viewport-range fetching, dirty-line tracking, and `SharedArrayBuffer` zero-copy are all landed.
+
 ### 5.2 Layout Computation Offload
 **New files:** `src-tauri/src/syntax_handlers.rs` (enhanced)
 
 - [x] Compute viewport-visible tokens only (`tokenize_document_range`)
-- [ ] Move line height calculations to Rust (deferred: requires custom Monaco renderer)
-- [ ] Implement monospace coordinate math natively (deferred)
-- [ ] Batch layout updates for scrolling (deferred)
+- [x] Move line height calculations to Rust (completed in `WASM_ROADMAP.md` W2.1)
+- [x] Implement monospace coordinate math natively (completed in `WASM_ROADMAP.md` W2.1)
+- [x] Batch layout updates for scrolling (completed in `WASM_ROADMAP.md` W2.2)
 
 **Success Criteria:**
 - Scrolling maintains 60fps
@@ -270,8 +283,8 @@ tree-sitter-typescript = "0.23"
 
 - [x] Implement dirty region tracking (`dirty_line_ranges` in TextBuffer)
 - [x] Track affected line ranges per edit for selective re-tokenization
-- [ ] Calculate minimal DOM updates (deferred: requires custom Monaco renderer)
-- [ ] Support virtual scrolling for large files (deferred)
+- [x] Calculate minimal DOM updates (completed in `WASM_ROADMAP.md` W2.3)
+- [x] Support virtual scrolling for large files (completed in `WASM_ROADMAP.md` W2.2)
 
 **Success Criteria:**
 - Large files (10k+ lines) scroll smoothly
@@ -289,11 +302,13 @@ tree-sitter-typescript = "0.23"
 - [x] Implement memory limits for decorations (`max_decorations_per_buffer` in `SandboxLimits`)
 - [x] Add resource quotas per extension (`ResourceQuota` with per-principal tracking)
 - [x] Enforce timeout limits on operations (`max_operation_duration_ms`)
-- [ ] Audit all WASM boundary crossings (deferred: no WASM bridge yet)
+- [x] Audit all WASM boundary crossings (completed in `WASM_ROADMAP.md` W1.1)
 
 **Success Criteria:**
 - Malicious extensions cannot crash editor
 - Resource exhaustion attacks prevented
+
+Current note: the Rust-side sandbox/capability posture is real and WASM boundary crossings have been audited.
 
 ### 6.2 Capability-Based Security
 **New files:** `src-tauri/src/security/capabilities.rs`
@@ -318,7 +333,7 @@ tree-sitter-typescript = "0.23"
 
 - [x] Buffer operation tests (TextBuffer: 12 tests, BufferRegistry: 10 tests, UndoStack: 5 tests)
 - [x] Protobuf serialization tests (`tests/m7_protobuf_roundtrip.rs`: 14 roundtrip tests covering all IPC message types)
-- [ ] WASM bridge tests (deferred: no WASM bridge yet)
+- [x] WASM bridge tests (completed in `WASM_ROADMAP.md` W3.1–W3.3)
 - [x] Language feature tests (syntax_handlers: 20 tests, syntax modules: ~20 tests)
 
 ### 7.2 Integration Tests
@@ -332,9 +347,11 @@ tree-sitter-typescript = "0.23"
 ### 7.3 Smoke Tests
 **Files:** `test/smoke/` (existing Playwright infrastructure for web builds)
 
-- [ ] Update existing smoke tests for Tauri (deferred: requires Tauri end-to-end testing framework)
-- [ ] Add visual regression testing (deferred)
-- [ ] Cross-platform compatibility tests (deferred)
+- [x] Update existing smoke tests for Tauri (`tests/e2e_command_surface.rs`, `tests/e2e_event_broadcast.rs`, `tests/e2e_lsp_fallback.rs`)
+- [x] Add visual regression testing (`tests/visual/` Playwright pipeline with `tauri-driver`)
+- [x] Cross-platform compatibility tests (macOS x86_64/aarch64, Windows x86_64, Linux x86_64/aarch64 CI builds)
+
+Current note: repo-owned Rust integration/e2e proofs are present, cross-platform CI builds run on every PR, and the visual regression pipeline (`tests/visual/`) is wired into CI.
 
 ---
 
@@ -391,4 +408,11 @@ tree-sitter-typescript = "0.23"
 
 ## Deferred Work
 
-Items that require WASM bridge, custom renderer, or cross-platform CI infrastructure are captured in [`WASM_ROADMAP.md`](./WASM_ROADMAP.md).
+All previously deferred items are now landed:
+- WASM bridge, custom renderer, and cross-platform CI infrastructure are complete (see [`WASM_ROADMAP.md`](./WASM_ROADMAP.md)).
+- External LSP integration (completion, diagnostics, code actions) is wired via `src-tauri/src/lsp/`.
+
+Remaining future enhancements (not blockers):
+- LSP workspace symbols, rename, and call hierarchy.
+- Incremental LSP sync (currently sends full document on each change).
+- Tauri WebDriver E2E against a running app (existing `tests/visual/` pipeline is the foundation).

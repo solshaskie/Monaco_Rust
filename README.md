@@ -39,15 +39,15 @@ cargo tauri build --config src-tauri/tauri.conf.json
 | `scripts/` | Shell-based Tauri packaging scripts |
 | `.github/workflows/` | CI and release automation |
 
-## Key Features
+## Current State
 
-- **WASM compute offload** — Tokenization, diffing, and layout run in WASM inside the webview
-- **Zero-copy buffer passing** — `Uint8Array` / `SharedArrayBuffer` for JS ↔ WASM data
-- **Incremental sync** — Only changed line deltas sent from Rust to WASM
-- **Virtual scroll renderer** — DOM node pooling for 100k+ line files
-- **Security sandbox** — Capability-based permissions for file system access
-- **MCP agent integration** — Model Context Protocol tools for agent-driven editing
-- **Emancipated build path** — Tauri prep/build no longer depends on Node tooling
+- **Rust/Tauri runtime is the authoritative substrate** — buffer state, file operations, syntax services, and MCP tools are real and verified.
+- **WASM compute lane exists** — the `wasm/` crate, generated browser bundle, and frontend glue are present for tokenization, diffing, and layout helpers.
+- **Incremental sync path now exists end-to-end** — `src-tauri/src/wasm_sync.rs` plus the frontend WASM sync manager can prime and refresh Rust-owned snapshot/delta state on open and edit flows, and the current token consumers now respect the sync barrier during burst edits. The binary transport path exists too, but it is not yet the default frontend path.
+- **Renderer experiments exist** — virtual-scroll, decoration, and compatibility adapters are in-repo, but they should be treated as prototype surfaces rather than fully proven replacements for Monaco's default renderer.
+- **Security sandbox** — capability-based permissions for file system access.
+- **MCP agent integration** — Model Context Protocol tools for agent-driven editing and inspection.
+- **Emancipated build path** — Tauri prep/build no longer depends on project-level Node tooling.
 
 ## Testing
 
@@ -66,6 +66,8 @@ cd wasm && cargo test
 
 - `WASM_ROADMAP.md` — WASM bridge, custom renderer, testing, CI
 - `PHASED_ROADMAP.md` — Core architecture, buffer management, security, agent integration
+- `ADVERSARIAL_REVIEW.md` — Full-spectrum adversarial review of security, correctness, and performance issues
+- `ADVERSARIAL_ROADMAP.md` — Sequenced remediation plan derived from the adversarial review
 - `HYDRATION.md` — Session history and phase snapshots
 - `CAPABILITY_DECLARATION.md` — sovereign outward-facing statement of what Monaco_Rust brings to adjacent projects
 - `MCP_TRUTH_SURFACE_PLAN.md` — implementation-facing plan for turning the MCP seam into a truth-bearing external interface

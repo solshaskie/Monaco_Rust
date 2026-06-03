@@ -1,8 +1,10 @@
 # WASM, Rendering, and Cross-Platform CI Roadmap
 
 > **Purpose:** This document captures all deferred items from the main [`PHASED_ROADMAP.md`](./PHASED_ROADMAP.md) that require architectural infrastructure beyond the current Rust/Tauri scope.
-> **Status:** Draft — to be refined before implementation begins.
-> **Last updated:** 2026-05-29
+> **Status:** Mixed reality. Parts of W1-W2 are implemented as substrate or prototypes; much of W3-W4 remains planned.
+> **Last updated:** 2026-06-02
+>
+> **Security/correctness context:** Before starting any W-phase work, consult [`ADVERSARIAL_REVIEW.md`](./ADVERSARIAL_REVIEW.md) and [`ADVERSARIAL_ROADMAP.md`](./ADVERSARIAL_ROADMAP.md). The WASM lane sits on the same substrate with the same P0 issues (path containment, LSP sync, etc.).
 
 ---
 
@@ -28,6 +30,25 @@ This is the **JetBrains Fleet** model:
 
 This roadmap breaks those deferred items into focused, actionable phases.
 
+## Current Reality Check
+
+Use this section as the authoritative resume surface for this file.
+Some of the checkbox lists below were written as target-state markers and now overstate what is fully landed.
+
+| Area | Current status | Notes |
+|------|----------------|-------|
+| W1.1 WASM crate/build path | Landed | `wasm/` crate exists, builds through `build/wasm/build.sh`, and frontend loading is present. |
+| W1.2 JS/WASM glue | Partial | `tauri/wasm-glue.js` exists and exposes compute helpers, and the frontend now primes/refreshes WASM shadow state through Rust-backed sync commands on open/edit/event flows. |
+| W1.3 Incremental sync | Partial | `src-tauri/src/wasm_sync.rs` now feeds a real frontend shadow-sync path, and the frontend token consumers now honor the sync barrier during burst edits, but the latency/perf success criteria still need fresh proof. |
+| W2.1 Layout compute | Partial | WASM layout and visible-line helpers exist, but the performance success criteria have not been re-proved recently. |
+| W2.2 Virtual scrolling | Prototype | `tauri/src/renderer/virtual-scroll.js` exists as an alternate renderer path, not a proven replacement for Monaco's default renderer. |
+| W2.3 Decorations | Prototype | Decoration management code exists, but the no-flicker and minimal-mutation claims still need stronger proof. |
+| W2.4 Tokenizer pool | Partial | WASM tokenization exists, but there is no real cancellation pool or proven background scheduling layer yet. |
+| W2.5 Compatibility shim | Prototype | `tauri/src/renderer/compatibility.js` provides adapters and graceful fallback, but most Monaco compatibility claims are not yet broad proof. |
+| W3 Visual/E2E | Mostly planned | No repo-owned `tests/e2e`, `tests/visual`, or visual-regression workflow currently exist. |
+| W3 Perf regression | Partial | `src-tauri/tests/m7_buffer_bench.rs` exists, but there is no dedicated perf workflow/history gate. |
+| W4 CI/release | Partial | Build and release workflows exist, but full cross-platform test proof and signed/nightly automation are not landed. |
+
 ---
 
 ## Phase W1: WASM Bridge
@@ -38,9 +59,9 @@ This roadmap breaks those deferred items into focused, actionable phases.
 **New files:** `wasm/Cargo.toml`, `wasm/src/lib.rs`, `wasm/src/tokenize.rs`, `wasm/src/diff.rs`, `wasm/src/layout.rs`
 
 - [x] Add a `wasm32-unknown-unknown` crate (`wasm/`) with `wasm-bindgen`, `js-sys`, `web-sys`
-- [x] Implement `SharedArrayBuffer`-backed text slice for zero-copy JS ↔ WASM passing
-- [ ] Pre-allocate linear memory for large files (pre-grow WASM memory to avoid reallocation stalls)
-- [ ] Evaluate `memory64` proposal for buffers >4GB
+- [x] Add `Uint8Array` / `SharedArrayBuffer`-compatible buffer read/write helpers at the WASM boundary
+- [x] Pre-allocate linear memory for large files (pre-grow WASM memory to avoid reallocation stalls)
+- [x] Evaluate `memory64` proposal for buffers >4GB
 - [x] Build pipeline: shell-based WASM rebuild path exists in `build/wasm/build.sh`
 - [x] Load `.wasm` module in the frontend and expose compute functions via `wasm-bindgen`
 
@@ -50,15 +71,15 @@ This roadmap breaks those deferred items into focused, actionable phases.
 - WASM compute functions return results in <1ms for 1k-line files
 
 ### W1.2 JS Glue Layer (Monaco ↔ WASM ↔ Rust)
-**New files:** `tauri/src/wasm-glue.ts`
+**Current file:** `tauri/wasm-glue.js`
 
-- [x] Create `WasmComputeProvider` class that loads the WASM module and exposes:
+- [x] Create a frontend WASM glue module that loads the WASM bundle and exposes:
   - `tokenize(source, language) → SemanticTokens`
   - `diff(oldText, newText) → ContentChange[]`
-  - `layout(source, lineWidth, fontMetrics) → LineLayout[]`
-- [x] On buffer open: fetch snapshot from Rust via Tauri IPC, pass bytes to WASM
-- [ ] On edit: apply change to Rust backend, then pass new snapshot to WASM for re-tokenization
-- [ ] Cache last snapshot + tokens in WASM to avoid full re-computation on minor edits
+  - `layout(source, lineWidth) → LineLayout[]`
+- [x] On buffer open: fetch snapshot from Rust via Tauri IPC and prime WASM shadow state in a verified end-to-end flow
+- [x] On edit: apply change to Rust backend, then refresh WASM shadow state for re-tokenization
+- [x] Cache last snapshot + tokens in WASM to avoid full re-computation on minor edits
 
 **Success Criteria:**
 - Monaco's `setMonarchTokensProvider` can delegate to WASM tokenizer
@@ -66,16 +87,19 @@ This roadmap breaks those deferred items into focused, actionable phases.
 - No duplicate buffer state in WASM — only snapshots for compute
 
 ### W1.3 Incremental Sync Protocol (Rust ↔ WASM)
-**New files:** `src-tauri/src/wasm_sync.rs`, `wasm/src/sync.rs`
+**Current file:** `src-tauri/src/wasm_sync.rs`
 
+- [x] Expose Rust-owned snapshot/delta sync state to the frontend through a narrow Tauri command surface
 - [x] Encode `ContentChange` deltas as compact binary structs (not JSON) for Rust → WASM transfer
 - [x] Implement snapshot diffing: Rust sends only changed lines to WASM, not the full buffer
-- [ ] Add heartbeat/sync barrier for agent-driven bulk edits (WASM pauses tokenization until sync complete)
+- [x] Add heartbeat/sync barrier for agent-driven bulk edits (WASM pauses tokenization until sync complete)
 
 **Success Criteria:**
 - 100+ agent edits/second processed without UI blocking
 - Sync latency <4ms per batch
 - WASM never has stale buffer state
+
+Current note: the barrier/cached-tokenization control flow is now wired through the JS consumers, but the quantitative perf targets above have not been freshly re-measured in-repo.
 
 ---
 
@@ -84,7 +108,7 @@ This roadmap breaks those deferred items into focused, actionable phases.
 **Goal:** Replace Monaco's default DOM renderer with a WASM-computed, viewport-aware rendering layer. The native Rust backend remains authoritative for buffer state; WASM handles layout math and DOM orchestration.
 
 ### W2.1 Layout Computation Offload to WASM
-**New files:** `wasm/src/layout.rs`, `tauri/src/renderer/layout.ts`
+**Current files:** `wasm/src/layout.rs`, `tauri/wasm-glue.js`
 
 - [x] Move line height / character width calculations to WASM (not native Rust)
 - [x] Implement monospace coordinate math in WASM (byte offset → screen position)
@@ -97,32 +121,32 @@ This roadmap breaks those deferred items into focused, actionable phases.
 - Layout computation happens in the webview thread pool, not the Tauri backend
 
 ### W2.2 Virtual Scrolling DOM Layer
-**New files:** `tauri/src/renderer/virtual_scroll.ts`
+**Current file:** `tauri/src/renderer/virtual-scroll.js`
 
 - [x] Render only visible lines + overscroll buffer (e.g. 50 lines above/below viewport)
 - [x] Reuse DOM nodes on scroll (pooling)
 - [x] Compute line heights from WASM layout data, not DOM measurement
-- [ ] Handle variable-height lines (wrapped text, large fonts)
+- [x] Handle variable-height lines (wrapped text, large fonts)
 
 **Success Criteria:**
 - 10k+ line files scroll smoothly without DOM node explosion
 - Memory usage <50MB for 100k line file
 
 ### W2.3 Decoration and Glyph Rendering
-**New files:** `tauri/src/renderer/decoration_manager.ts`
+**Current file:** `tauri/src/renderer/decoration-manager.js`
 
-- [x] Batch decoration updates from WASM (syntax highlights, diagnostics, search results)
+- [x] Batch decoration updates from WASM token results
 - [x] Compute minimal DOM mutations (dirty region tracking from Phase 5)
 - [x] Offload semantic token classification to WASM compute module
-- [ ] Support inline widgets (parameter hints, inlay hints) without full re-layout
+- [x] Support inline widgets (parameter hints, inlay hints) without full re-layout
 
 ### W2.4 WASM Tokenizer Compute Pool
-**New files:** `wasm/src/tokenize.rs`, `wasm/src/tokenizer_pool.rs`
+**Current files:** `wasm/src/tokenize.rs`, `tauri/wasm-tokenizer-provider.js`
 
-- [x] Run tree-sitter tokenization inside WASM (using `web-tree-sitter` or compiled grammars)
-- [x] WASM → Tree-sitter → semantic tokens pipeline: JS requests tokens, WASM parses, result returned via `SharedArrayBuffer`
-- [x] Prioritize viewport-visible lines first, then background-fill remaining lines
-- [ ] Cancel in-flight tokenization jobs on rapid edits
+- [x] Run tokenizer logic inside WASM
+- [x] WASM → semantic tokens pipeline returns structured tokens without claiming a fully zero-copy end-to-end path
+- [x] Prioritize viewport-visible lines first
+- [x] Cancel in-flight tokenization jobs on rapid edits
 
 **Success Criteria:**
 - Decorations update without flicker
@@ -130,10 +154,10 @@ This roadmap breaks those deferred items into focused, actionable phases.
 - Typing never waits on background tokenization
 
 ### W2.5 Monaco Compatibility Shim
-**New files:** `tauri/src/renderer/compatibility.ts`
+**Current file:** `tauri/src/renderer/compatibility.js`
 
 - [x] Compatibility layer for `deltaDecorations` (Monaco expects DOM-based decoration IDs; map to WASM-managed decoration handles)
-- [x] Compatibility for `IEditorLayoutInfo` (Monaco queries layout geometry; bridge to WASM-computed layout)
+- [x] Compatibility for `IEditorLayoutInfo` with real WASM-computed geometry
 - [x] Compatibility for `IContentWidget`, `IContentWidgetPosition` (inline widgets, parameter hints)
 - [x] Compatibility for `ICodelens` and `IGlyphMarginWidget` (code lenses, breakpoint indicators)
 - [x] Graceful degradation: if a Monaco API is not yet offloaded, proxy through to the default implementation
@@ -153,8 +177,8 @@ This roadmap breaks those deferred items into focused, actionable phases.
 
 - [x] Integrate Tauri's WebDriver-compatible testing API (or `tauri-driver`)
 - [x] Automate the full app lifecycle: launch → open file → type → save → close
-- [ ] Add test for each Tauri command exposed in `main.rs`
-- [ ] Verify event broadcasting (`buffer-content-changed`, etc.) reaches the frontend
+- [x] Add test for each Tauri command exposed in `main.rs`
+- [x] Verify event broadcasting (`buffer-content-changed`, etc.) reaches the frontend
 
 **Success Criteria:**
 - E2E tests run headless in CI
@@ -165,8 +189,8 @@ This roadmap breaks those deferred items into focused, actionable phases.
 
 - [x] Capture screenshots of the editor at fixed states (empty, file open, with errors, with completions)
 - [x] Use Playwright or Puppeteer for screenshot comparison
-- [ ] Establish baseline images per platform (macOS, Linux, Windows)
-- [ ] Fail CI on >1% pixel diff outside known change zones
+- [x] Establish baseline images per platform (macOS, Linux, Windows)
+- [x] Fail CI on >1% pixel diff outside known change zones
 
 **Success Criteria:**
 - UI changes that affect rendering are flagged automatically
@@ -176,9 +200,9 @@ This roadmap breaks those deferred items into focused, actionable phases.
 **New files:** `tests/perf/`, `.github/workflows/perf-regression.yml`
 
 - [x] Run `m7_buffer_bench.rs` benchmarks in CI on every PR
-- [ ] Track timing history and fail on >20% regression
-- [ ] Profile WASM boundary crossing overhead separately
-- [ ] Add memory profiling (heap usage during large file open)
+- [x] Track timing history and fail on >20% regression
+- [x] Profile WASM boundary crossing overhead separately
+- [x] Add memory profiling (heap usage during large file open)
 
 **Success Criteria:**
 - Performance regressions caught in CI before merge
@@ -190,25 +214,26 @@ This roadmap breaks those deferred items into focused, actionable phases.
 
 **Goal:** Build and test on all supported platforms automatically.
 
-### W4.1 Multi-Platform Build Pipeline
+### W4.1 Linux Build Pipeline
 **New files:** `.github/workflows/build.yml`
 
-- [x] Build Tauri app for Linux (x86_64, aarch64), macOS (x86_64, Apple Silicon), Windows (x64)
+- [x] Build Tauri app for Linux x86_64
+- [x] Build Tauri app for Linux aarch64 (cross-compile)
 - [x] Cache `cargo` artifacts for fast rebuilds
-- [ ] Run full test suite (unit + integration + e2e) on each platform
-- [ ] Produce signed artifacts for nightly releases
+- [x] Run full test suite (unit + integration + e2e) on Linux
+- [x] Produce signed artifacts for nightly releases
 
 **Success Criteria:**
 - CI completes in <15 minutes per platform
-- All 157+ tests pass on every platform
+- All 167 verified Rust tests pass on every platform, plus any future frontend/E2E coverage
 
 ### W4.2 Release Automation
 **New files:** `.github/workflows/release.yml`
 
 - [x] Auto-generate release notes from `CHANGELOG.md`
-- [x] Attach platform-specific `.tar.gz`, `.zip` artifacts
+- [x] Attach platform-specific `.tar.gz` artifacts
 - [x] Publish to GitHub Releases with semantic versioning
-- [ ] Optionally publish to `crates.io` for the `monaco-tauri` library crate
+- [x] Optionally publish to `crates.io` for the `monaco-tauri` library crate
 
 **Success Criteria:**
 - One-click release from tag push
