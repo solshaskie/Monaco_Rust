@@ -1,54 +1,15 @@
-{
-  "version": 1,
-  "kind": "codex-brain-handoff-checkpoint",
-  "workspace": {
-    "id": "/data/projects/Monaco|/home/steve/Downloads/VSC",
-    "label": "Monaco, VSC",
-    "roots": [
-      "/data/projects/Monaco",
-      "/home/steve/Downloads/VSC"
-    ]
-  },
-  "writtenAt": "2026-05-28T19:39:47.410Z",
-  "session": {
-    "sessionId": "8e988eee-12fe-42a0-8e4f-f2bb597139bf",
-    "threadTitle": "Monaco Tauri prototype through M4.1 with GitHub sync",
-    "confidence": "high",
-    "trustState": "experimental"
-  },
-  "continuity": {
-    "projectIdentity": "npm install monaco-editor Note: If the extension is fully based on the [LSP](https://microsoft.github.io/language-server-protocol/) and i...",
-    "currentMission": "Hydrate and continue with M4.2 by defining the thinnest dependency-style consumption test from the VSC repo back to the Monaco artifact or source surface, without disturbing the existing VSC host proof.",
-    "motivationPulse": "Resume in Monaco/VSC dual-workspace mode. Trust current docs: MVP_FORWARD_PLAN.md in VSC is up to date through M4.1, and Monaco PHASED_ROADMAP.md includes the live hover proof plus repo-native integration tests. Start by choosing the smallest M4.2 dependency seam from VSC to Monaco.",
-    "summary": "Closed out the Monaco Tauri prototype session and synced both repos. Monaco repo /data/projects/Monaco is now on GitHub at origin/main with root commit 2861d9c 'Initial Monaco Tauri prototype baseline'. VSC repo /home/steve/Downloads/VSC/vscode pushed commit e1d8fb9d2e1 'Update Monaco forward plan progress' so MVP_FORWARD_PLAN.md reflects Monaco M1-M4.1 progress. Monaco Stage M3 is live-proven: workers panel shows JSON and TypeScript ready, tabs work, file open/save works, quick info and hover are proven in gulpfile.js. M4.1 is implemented via src-tauri/src/lib.rs plus src-tauri/tests/m4_integration.rs; cargo test passed. Monaco repo is clean after push. VSC repo is pushed for the plan doc but still has unrelated unstaged deletions of CONTRIBUTING.md and SECURITY.md that were intentionally left alone.",
-    "currentState": "Monaco M1, M2, M3, and M4.1 are complete and documented. The next planned lane is M4.2: test Monaco as a dependency path back in the VSC repo. Monaco repo is ready for hydration with no pending worktree changes. VSC repo is mostly stable but has two unrelated local deletions not made in this session.",
-    "resumeBrief": "Resume in Monaco/VSC dual-workspace mode. Trust current docs: MVP_FORWARD_PLAN.md in VSC is up to date through M4.1, and Monaco PHASED_ROADMAP.md includes the live hover proof plus repo-native integration tests. Start by choosing the smallest M4.2 dependency seam from VSC to Monaco.",
-    "nextLikelyAction": "Hydrate and continue with M4.2 by defining the thinnest dependency-style consumption test from the VSC repo back to the Monaco artifact or source surface, without disturbing the existing VSC host proof.",
-    "openQuestions": [
-      "For M4.2, should VSC consume Monaco from source/workspace linkage first or from a packaged artifact first?",
-      "Should the dependency proof target the existing monaco-editor shell path in VSC or a smaller isolated consumption seam?"
-    ],
-    "cautions": [
-      "Do not treat the old save-close behavior as a real save bug; it was src-tauri dev-watch rebuild behavior.",
-      "Do not disturb the two unrelated VSC deletions unless the user explicitly asks.",
-      "Monaco hover proof is now real, but the proof note depends on the current tauri/index.html language panel and URI-backed models; keep that shell intact while moving into M4.2."
-    ],
-    "mustNotDo": [
-      "Do not revert or stage the unrelated VSC CONTRIBUTING.md and SECURITY.md deletions.",
-      "Do not broaden M4.2 into packaging or release work before establishing a narrow dependency proof."
-    ]
-  },
-  "context": {
-    "contextRefs": [],
-    "sourceRefs": [
-      "README.md",
-      "PROJECT_DNA.md",
-      "SESSION_HANDOFF.md",
-      ".project"
-    ]
-  },
-  "toolingContext": {
-    "mcpServers": [],
-    "notes": []
-  }
-}
+- [x] Build complete architectural model
+- [x] Read all proto schemas
+- [x] Read Cargo.toml + tauri.conf.json
+- [x] Read all Rust source modules
+- [x] Read all WASM source
+- [x] Read all Tauri-side JS
+- [x] Read all test files
+- [x] Read CI workflows
+- [x] Read all roadmap/hydration/capability docs
+- [x] Synthesize: architecture map
+- [x] Synthesize: module-by-module review
+- [x] Synthesize: critical issues
+- [x] Synthesize: high-value optimizations
+- [x] Synthesize: new MCP tool recommendations
+- [x] Synthesize: final maturity verdict

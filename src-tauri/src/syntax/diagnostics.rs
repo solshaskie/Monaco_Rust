@@ -48,7 +48,11 @@ fn traverse_for_errors(node: &Node, diagnostics: &mut Vec<SyntaxDiagnostic>, sou
             end_line: node.end_position().row as u32 + 1,
             end_column: node.end_position().column as u32 + 1,
             message: if node.is_missing() {
-                format!("Missing {} in {}", node.kind(), node.parent().map(|p| p.kind()).unwrap_or("program"))
+                format!(
+                    "Missing {} in {}",
+                    node.kind(),
+                    node.parent().map(|p| p.kind()).unwrap_or("program")
+                )
             } else {
                 format!("Unexpected '{}'", node.kind())
             },

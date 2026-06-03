@@ -15,29 +15,33 @@ pub struct SyntaxToken {
 fn node_kind_to_token_type(kind: &str) -> Option<&'static str> {
     match kind {
         // Rust keywords
-        "use" | "fn" | "struct" | "enum" | "impl" | "trait" | "type" | "where"
-        | "let" | "mut" | "const" | "static" | "pub" | "crate" | "mod" | "if"
-        | "else" | "match" | "for" | "while" | "loop" | "break" | "continue"
-        | "return" | "async" | "await" | "move" | "ref" | "self" | "super"
-        | "in" | "as" | "dyn" | "box" | "yield" | "try" | "macro" => Some("keyword"),
+        "use" | "fn" | "struct" | "enum" | "impl" | "trait" | "type" | "where" | "let" | "mut"
+        | "const" | "static" | "pub" | "crate" | "mod" | "if" | "else" | "match" | "for"
+        | "while" | "loop" | "break" | "continue" | "return" | "async" | "await" | "move"
+        | "ref" | "self" | "super" | "in" | "as" | "dyn" | "box" | "yield" | "try" | "macro" => {
+            Some("keyword")
+        }
 
         // JavaScript / TypeScript keywords
-        "function" | "class" | "extends" | "import" | "export" | "from"
-        | "var" | "switch" | "case" | "default" | "do" | "catch" | "finally"
-        | "throw" | "new" | "this" | "typeof" | "instanceof" | "void" | "delete"
-        | "debugger" | "with" | "get" | "set" | "of" | "interface" | "namespace"
-        | "module" | "declare" | "abstract" | "implements" | "public" | "private"
-        | "protected" | "readonly" | "override" => Some("keyword"),
+        "function" | "class" | "extends" | "import" | "export" | "from" | "var" | "switch"
+        | "case" | "default" | "do" | "catch" | "finally" | "throw" | "new" | "this" | "typeof"
+        | "instanceof" | "void" | "delete" | "debugger" | "with" | "get" | "set" | "of"
+        | "interface" | "namespace" | "module" | "declare" | "abstract" | "implements"
+        | "public" | "private" | "protected" | "readonly" | "override" => Some("keyword"),
 
         // Identifiers
-        "identifier" | "type_identifier" | "field_identifier"
-        | "property_identifier" | "shorthand_property_identifier"
+        "identifier"
+        | "type_identifier"
+        | "field_identifier"
+        | "property_identifier"
+        | "shorthand_property_identifier"
         | "shorthand_property_identifier_pattern"
         | "statement_identifier" => Some("identifier"),
 
         // Literals
-        "string_literal" | "raw_string_literal" | "char_literal"
-        | "string" | "template_string" => Some("string"),
+        "string_literal" | "raw_string_literal" | "char_literal" | "string" | "template_string" => {
+            Some("string")
+        }
         "integer_literal" | "float_literal" | "number" => Some("number"),
         "boolean_literal" | "true" | "false" => Some("keyword"),
         "lifetime" => Some("keyword"),
@@ -48,11 +52,12 @@ fn node_kind_to_token_type(kind: &str) -> Option<&'static str> {
         "line_comment" | "block_comment" | "comment" => Some("comment"),
 
         // Operators and punctuation
-        "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "!" | "~" | "=" | "<"
-        | ">" | "&&" | "||" | "==" | "!=" | "<=" | ">=" | "<<" | ">>" | "+="
-        | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | "=>"
-        | "->" | ".." | "..=" | "::" | "??" | "?." | "**" | "++" | "--"
-        | "===" | "!==" | "||=" | "&&=" | "??=" | "<<<" | ">>>" => Some("operator"),
+        "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "!" | "~" | "=" | "<" | ">" | "&&"
+        | "||" | "==" | "!=" | "<=" | ">=" | "<<" | ">>" | "+=" | "-=" | "*=" | "/=" | "%="
+        | "&=" | "|=" | "^=" | "<<=" | ">>=" | "=>" | "->" | ".." | "..=" | "::" | "??" | "?."
+        | "**" | "++" | "--" | "===" | "!==" | "||=" | "&&=" | "??=" | "<<<" | ">>>" => {
+            Some("operator")
+        }
 
         // Delimiters
         "(" | ")" | "{" | "}" | "[" | "]" | ";" | "," | "." => Some("delimiter"),
@@ -61,9 +66,7 @@ fn node_kind_to_token_type(kind: &str) -> Option<&'static str> {
         "format_specifier" | "escape_sequence" | "escape" => Some("string"),
 
         // Attributes / macros
-        "attribute" | "attribute_item" | "macro_invocation" | "macro_rule" => {
-            Some("macro")
-        }
+        "attribute" | "attribute_item" | "macro_invocation" | "macro_rule" => Some("macro"),
 
         // Type-related
         "primitive_type" | "predefined_type" => Some("type"),
@@ -82,7 +85,12 @@ pub fn tokenize_tree(tree: &Tree, source: &str) -> Vec<SyntaxToken> {
 
 /// Extracts syntax tokens for a specific line range [start_line, end_line) (1-indexed).
 /// Tokens that overlap the range are included.
-pub fn tokenize_tree_range(tree: &Tree, source: &str, start_line: u32, end_line: u32) -> Vec<SyntaxToken> {
+pub fn tokenize_tree_range(
+    tree: &Tree,
+    source: &str,
+    start_line: u32,
+    end_line: u32,
+) -> Vec<SyntaxToken> {
     let all_tokens = tokenize_tree(tree, source);
     all_tokens
         .into_iter()

@@ -1,6 +1,7 @@
 pub mod buffer;
 pub mod events;
 pub mod host_handlers;
+pub mod lsp;
 pub mod mcp;
 pub mod proto;
 pub mod security;

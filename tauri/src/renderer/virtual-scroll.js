@@ -25,6 +25,7 @@ export class VirtualScrollRenderer {
     this.totalLines = 0;
     this.scrollTop = 0;
     this.viewportHeight = container.clientHeight || 600;
+    this.wasmLayout = null; // per-line layout from WASM (for variable heights)
 
     // DOM node pool
     this.pool = [];
@@ -32,6 +33,16 @@ export class VirtualScrollRenderer {
 
     this._setupDOM();
     this._bindEvents();
+  }
+
+  /**
+   * Set per-line layout data from WASM compute module.
+   * Enables variable-height line rendering.
+   */
+  setLayout(layout) {
+    this.wasmLayout = layout;
+    this._updateSpacer();
+    this._renderViewport();
   }
 
   _setupDOM() {
@@ -82,7 +93,15 @@ export class VirtualScrollRenderer {
   }
 
   _updateSpacer() {
-    const totalHeight = this.totalLines * this.lineHeight;
+    let totalHeight;
+    if (this.wasmLayout) {
+      // Variable height: each line contributes (1 + wrap_count) * lineHeight
+      totalHeight = this.wasmLayout.reduce((sum, line) => {
+        return sum + (1 + (line.wrap_count || 0)) * this.lineHeight;
+      }, 0);
+    } else {
+      totalHeight = this.totalLines * this.lineHeight;
+    }
     this.spacer.style.height = `${totalHeight}px`;
   }
 
@@ -101,6 +120,14 @@ export class VirtualScrollRenderer {
 
     const startLine = Math.max(0, visible.start_line - this.overscroll);
     const endLine = Math.min(this.totalLines, visible.end_line + this.overscroll);
+
+    // Precompute cumulative Y offsets for variable-height lines
+    const yOffsets = new Array(endLine + 1);
+    yOffsets[0] = 0;
+    for (let i = 0; i < endLine; i++) {
+      const h = this._lineHeight(i);
+      yOffsets[i + 1] = yOffsets[i] + h;
+    }
 
     // Get lines from source
     const lines = this.source.split('\n');
@@ -122,19 +149,28 @@ export class VirtualScrollRenderer {
 
     // Render needed lines
     for (let i = startLine; i < endLine; i++) {
+      const y = yOffsets[i];
       if (this.activeNodes.has(i)) {
         // Node already rendered, just update position
         const node = this.activeNodes.get(i);
-        node.style.transform = `translateY(${i * this.lineHeight}px)`;
+        node.style.transform = `translateY(${y}px)`;
         continue;
       }
 
       const lineText = lines[i] || '';
       const node = this._acquireNode(i, lineText);
-      node.style.transform = `translateY(${i * this.lineHeight}px)`;
+      node.style.transform = `translateY(${y}px)`;
+      node.style.height = `${this._lineHeight(i)}px`;
       this.contentLayer.appendChild(node);
       this.activeNodes.set(i, node);
     }
+  }
+
+  _lineHeight(lineIndex) {
+    if (this.wasmLayout && this.wasmLayout[lineIndex]) {
+      return (1 + (this.wasmLayout[lineIndex].wrap_count || 0)) * this.lineHeight;
+    }
+    return this.lineHeight;
   }
 
   _acquireNode(lineIndex, text) {

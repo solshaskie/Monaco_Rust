@@ -47,7 +47,12 @@ impl ContentChange {
     }
 
     /// Creates a content change for deleting a range.
-    pub fn delete(start_position: Position, end_position: Position, range_offset: u64, range_length: u64) -> Self {
+    pub fn delete(
+        start_position: Position,
+        end_position: Position,
+        range_offset: u64,
+        range_length: u64,
+    ) -> Self {
         Self {
             start_position,
             end_position,
@@ -112,12 +117,7 @@ mod tests {
 
     #[test]
     fn content_change_delete() {
-        let change = ContentChange::delete(
-            Position::new(1, 1),
-            Position::new(1, 5),
-            0,
-            4,
-        );
+        let change = ContentChange::delete(Position::new(1, 1), Position::new(1, 5), 0, 4);
 
         assert_eq!(change.text, "");
         assert_eq!(change.range_length, 4);

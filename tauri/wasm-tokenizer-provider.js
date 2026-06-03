@@ -5,7 +5,29 @@
  * This is a proof-of-concept for W1.2: JS Glue Layer.
  */
 
-import { tokenize, tokenizeRange } from './wasm-glue.js';
+import { tokenizeCached } from './wasm-glue.js';
+
+function getModelPath(model) {
+  if (!model || !model.uri) {
+    return null;
+  }
+  if (model.uri.scheme === 'file') {
+    return model.uri.path;
+  }
+  return model.uri.toString();
+}
+
+function getWasmSyncSource(model) {
+  const path = getModelPath(model);
+  const manager = window.wasmBufferSync;
+  if (path && manager && typeof manager.getContent === 'function') {
+    const content = manager.getContent(path);
+    if (typeof content === 'string') {
+      return content;
+    }
+  }
+  return model.getValue();
+}
 
 /**
  * Convert WASM tokens to Monaco's ILineTokens format.
@@ -114,17 +136,37 @@ export async function registerWasmTokenizer(monaco, languageId) {
   });
 }
 
+const tokenizationGeneration = new Map(); // model uri -> generation counter
+const semanticTokenCache = new Map(); // model uri -> Uint32Array
+
 async function provideSemanticTokens(model) {
-  const source = model.getValue();
+  const path = getModelPath(model);
+  const uri = model.uri.toString();
+  const manager = window.wasmBufferSync;
+
+  if (path && manager && manager.isSyncBarrierActive(path)) {
+    return { data: semanticTokenCache.get(uri) || new Uint32Array(0) };
+  }
+
+  const source = getWasmSyncSource(model);
   const language = model.getLanguageId();
+  const resource = path || uri;
+
+  const gen = (tokenizationGeneration.get(uri) || 0) + 1;
+  tokenizationGeneration.set(uri, gen);
 
   try {
-    const wasmTokens = await tokenize(source, language);
+    const wasmTokens = await tokenizeCached(source, language, resource);
+    // Discard result if a newer tokenization request arrived
+    if (tokenizationGeneration.get(uri) !== gen) {
+      return { data: semanticTokenCache.get(uri) || new Uint32Array(0) };
+    }
     const data = encodeSemanticTokens(wasmTokens);
+    semanticTokenCache.set(uri, data);
     return { data };
   } catch (e) {
     console.warn('[WASM Tokenizer] Failed:', e);
-    return { data: new Uint32Array(0) };
+    return { data: semanticTokenCache.get(uri) || new Uint32Array(0) };
   }
 }
 

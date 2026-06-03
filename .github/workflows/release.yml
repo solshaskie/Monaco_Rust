@@ -45,7 +45,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact_name: monaco-tauri
             asset_name: monaco-tauri-linux-x86_64
-          - platform: macos-latest
+          - platform: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: monaco-tauri
+            asset_name: monaco-tauri-linux-aarch64
+          - platform: macos-13
             target: x86_64-apple-darwin
             artifact_name: monaco-tauri
             asset_name: monaco-tauri-macos-x86_64
@@ -56,7 +60,7 @@ jobs:
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: monaco-tauri.exe
-            asset_name: monaco-tauri-windows-x86_64.exe
+            asset_name: monaco-tauri-windows-x86_64
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -77,34 +81,50 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Install dependencies (Ubuntu)
-        if: contains(matrix.platform, 'ubuntu')
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+          fi
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
 
       - name: Build Release
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu-gcc' || '' }}
         run: cd src-tauri && cargo build --release --target ${{ matrix.target }}
 
       - name: Package (Unix)
-        if: matrix.platform != 'windows-latest'
+        if: runner.os != 'Windows'
         run: |
           cd src-tauri/target/${{ matrix.target }}/release
           tar czf ../../../${{ matrix.asset_name }}.tar.gz ${{ matrix.artifact_name }}
           cd ../../..
 
       - name: Package (Windows)
-        if: matrix.platform == 'windows-latest'
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
           cd src-tauri/target/${{ matrix.target }}/release
-          7z a ../../../${{ matrix.asset_name }}.zip ${{ matrix.artifact_name }}
+          Compress-Archive -Path ${{ matrix.artifact_name }} -DestinationPath ../../../${{ matrix.asset_name }}.zip
           cd ../../..
 
+      - name: Sign artifact (GPG)
+        if: runner.os != 'Windows'
+        env:
+          GPG_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [ -n "$GPG_KEY" ]; then
+            echo "$GPG_KEY" | gpg --batch --yes --import
+            gpg --batch --yes --detach-sign --armor ${{ matrix.asset_name }}.tar.gz
+          fi
+
       - name: Upload Release Asset (Unix)
-        if: matrix.platform != 'windows-latest'
+        if: runner.os != 'Windows'
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -115,7 +135,7 @@ jobs:
           asset_content_type: application/gzip
 
       - name: Upload Release Asset (Windows)
-        if: matrix.platform == 'windows-latest'
+        if: runner.os == 'Windows'
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -124,3 +144,43 @@ jobs:
           asset_path: ./${{ matrix.asset_name }}.zip
           asset_name: ${{ matrix.asset_name }}.zip
           asset_content_type: application/zip
+
+      - name: Upload signature
+        if: runner.os != 'Windows'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [ -n "$GPG_KEY" ] && [ -f ${{ matrix.asset_name }}.tar.gz.asc ]; then
+            gh release upload "${{ github.ref_name }}" ${{ matrix.asset_name }}.tar.gz.asc
+          fi
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: build-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
+      - name: Verify publishable
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -n "$CARGO_REGISTRY_TOKEN" ]; then
+            cd src-tauri && cargo publish --dry-run
+          else
+            echo "CARGO_REGISTRY_TOKEN not set; skipping crates.io publish"
+          fi

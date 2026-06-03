@@ -25,7 +25,10 @@ fn traverse_for_symbols(node: &Node, source: &str, symbols: &mut Vec<DocumentSym
     match node.kind() {
         "function_item" => {
             if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                let name = name_node
+                    .utf8_text(source.as_bytes())
+                    .unwrap_or("")
+                    .to_string();
                 symbols.push(DocumentSymbol {
                     name,
                     detail: "function".to_string(),
@@ -40,7 +43,10 @@ fn traverse_for_symbols(node: &Node, source: &str, symbols: &mut Vec<DocumentSym
         }
         "struct_item" => {
             if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                let name = name_node
+                    .utf8_text(source.as_bytes())
+                    .unwrap_or("")
+                    .to_string();
                 let children = extract_field_children(node, source);
                 symbols.push(DocumentSymbol {
                     name,
@@ -56,7 +62,10 @@ fn traverse_for_symbols(node: &Node, source: &str, symbols: &mut Vec<DocumentSym
         }
         "enum_item" => {
             if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                let name = name_node
+                    .utf8_text(source.as_bytes())
+                    .unwrap_or("")
+                    .to_string();
                 let children = extract_enum_variant_children(node, source);
                 symbols.push(DocumentSymbol {
                     name,
@@ -72,7 +81,10 @@ fn traverse_for_symbols(node: &Node, source: &str, symbols: &mut Vec<DocumentSym
         }
         "trait_item" => {
             if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                let name = name_node
+                    .utf8_text(source.as_bytes())
+                    .unwrap_or("")
+                    .to_string();
                 symbols.push(DocumentSymbol {
                     name,
                     detail: "trait".to_string(),
@@ -87,7 +99,10 @@ fn traverse_for_symbols(node: &Node, source: &str, symbols: &mut Vec<DocumentSym
         }
         "impl_item" => {
             if let Some(type_node) = node.child_by_field_name("type") {
-                let name = type_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                let name = type_node
+                    .utf8_text(source.as_bytes())
+                    .unwrap_or("")
+                    .to_string();
                 symbols.push(DocumentSymbol {
                     name,
                     detail: "impl".to_string(),
@@ -102,7 +117,10 @@ fn traverse_for_symbols(node: &Node, source: &str, symbols: &mut Vec<DocumentSym
         }
         "mod_item" => {
             if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                let name = name_node
+                    .utf8_text(source.as_bytes())
+                    .unwrap_or("")
+                    .to_string();
                 symbols.push(DocumentSymbol {
                     name,
                     detail: "mod".to_string(),
@@ -117,7 +135,10 @@ fn traverse_for_symbols(node: &Node, source: &str, symbols: &mut Vec<DocumentSym
         }
         "const_item" => {
             if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                let name = name_node
+                    .utf8_text(source.as_bytes())
+                    .unwrap_or("")
+                    .to_string();
                 symbols.push(DocumentSymbol {
                     name,
                     detail: "const".to_string(),
@@ -132,7 +153,10 @@ fn traverse_for_symbols(node: &Node, source: &str, symbols: &mut Vec<DocumentSym
         }
         "static_item" => {
             if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                let name = name_node
+                    .utf8_text(source.as_bytes())
+                    .unwrap_or("")
+                    .to_string();
                 symbols.push(DocumentSymbol {
                     name,
                     detail: "static".to_string(),
@@ -147,7 +171,10 @@ fn traverse_for_symbols(node: &Node, source: &str, symbols: &mut Vec<DocumentSym
         }
         "type_item" => {
             if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                let name = name_node
+                    .utf8_text(source.as_bytes())
+                    .unwrap_or("")
+                    .to_string();
                 symbols.push(DocumentSymbol {
                     name,
                     detail: "type".to_string(),
@@ -162,7 +189,10 @@ fn traverse_for_symbols(node: &Node, source: &str, symbols: &mut Vec<DocumentSym
         }
         "macro_definition" => {
             if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                let name = name_node
+                    .utf8_text(source.as_bytes())
+                    .unwrap_or("")
+                    .to_string();
                 symbols.push(DocumentSymbol {
                     name,
                     detail: "macro".to_string(),
@@ -212,7 +242,10 @@ fn extract_field_children(node: &Node, source: &str) -> Vec<DocumentSymbol> {
                 let field = cursor.node();
                 if field.kind() == "field_declaration" {
                     if let Some(name_node) = field.child_by_field_name("name") {
-                        let name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                        let name = name_node
+                            .utf8_text(source.as_bytes())
+                            .unwrap_or("")
+                            .to_string();
                         children.push(DocumentSymbol {
                             name,
                             detail: "field".to_string(),
@@ -243,7 +276,10 @@ fn extract_enum_variant_children(node: &Node, source: &str) -> Vec<DocumentSymbo
                 let variant = cursor.node();
                 if variant.kind() == "enum_variant" {
                     if let Some(name_node) = variant.child_by_field_name("name") {
-                        let name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                        let name = name_node
+                            .utf8_text(source.as_bytes())
+                            .unwrap_or("")
+                            .to_string();
                         children.push(DocumentSymbol {
                             name,
                             detail: "variant".to_string(),
@@ -329,8 +365,12 @@ enum Baz { A, B }
         let symbols = extract_document_symbols(&parsed.tree, source);
 
         assert_eq!(symbols.len(), 3);
-        assert!(symbols.iter().any(|s| s.name == "foo" && s.kind == "function"));
-        assert!(symbols.iter().any(|s| s.name == "Bar" && s.kind == "struct"));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "foo" && s.kind == "function"));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Bar" && s.kind == "struct"));
         assert!(symbols.iter().any(|s| s.name == "Baz" && s.kind == "enum"));
     }
 }

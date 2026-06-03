@@ -198,6 +198,34 @@ message FoldingRangeResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Code Actions
+// ---------------------------------------------------------------------------
+
+message CodeActionRequest {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+  uint32 start_line = 3;
+  uint32 start_column = 4;
+  uint32 end_line = 5;
+  uint32 end_column = 6;
+  string kind_filter = 7;          // e.g. "quickfix", "refactor", empty = all
+}
+
+message CodeAction {
+  string title = 1;
+  string kind = 2;                  // "quickfix", "refactor", "source.organizeImports", etc.
+  bytes diagnostics_json = 3;       // JSON-encoded array of LSP Diagnostic (compressed)
+  bytes edit_json = 4;              // JSON-encoded WorkspaceEdit
+  bool is_preferred = 5;
+}
+
+message CodeActionResponse {
+  code.ipc.file.Uri resource = 1;
+  uint64 version_id = 2;
+  repeated CodeAction actions = 3;
+}
+
+// ---------------------------------------------------------------------------
 // Push events (carried in IpcEvent envelope)
 // ---------------------------------------------------------------------------
 

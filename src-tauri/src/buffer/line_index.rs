@@ -29,7 +29,10 @@ impl LineIndex {
         let mut pos = 0;
         while pos < content.len() {
             // Find the end of the current line
-            let line_end = content[pos..].find('\n').map(|p| pos + p).unwrap_or(content.len());
+            let line_end = content[pos..]
+                .find('\n')
+                .map(|p| pos + p)
+                .unwrap_or(content.len());
 
             // Count UTF-16 units for this line (excluding newline)
             total_utf16_units += content[pos..line_end].encode_utf16().count();
@@ -203,10 +206,22 @@ mod tests {
         let content = "hello\nworld";
         let index = LineIndex::new(content);
 
-        assert_eq!(index.position_to_offset(content, crate::buffer::Position::new(1, 1)), Some(0));
-        assert_eq!(index.position_to_offset(content, crate::buffer::Position::new(1, 3)), Some(2));
-        assert_eq!(index.position_to_offset(content, crate::buffer::Position::new(2, 1)), Some(6));
-        assert_eq!(index.position_to_offset(content, crate::buffer::Position::new(2, 4)), Some(9));
+        assert_eq!(
+            index.position_to_offset(content, crate::buffer::Position::new(1, 1)),
+            Some(0)
+        );
+        assert_eq!(
+            index.position_to_offset(content, crate::buffer::Position::new(1, 3)),
+            Some(2)
+        );
+        assert_eq!(
+            index.position_to_offset(content, crate::buffer::Position::new(2, 1)),
+            Some(6)
+        );
+        assert_eq!(
+            index.position_to_offset(content, crate::buffer::Position::new(2, 4)),
+            Some(9)
+        );
     }
 
     #[test]
@@ -214,9 +229,21 @@ mod tests {
         let content = "hello\nworld";
         let index = LineIndex::new(content);
 
-        assert_eq!(index.offset_to_position(content, 0), Some(crate::buffer::Position::new(1, 1)));
-        assert_eq!(index.offset_to_position(content, 2), Some(crate::buffer::Position::new(1, 3)));
-        assert_eq!(index.offset_to_position(content, 6), Some(crate::buffer::Position::new(2, 1)));
-        assert_eq!(index.offset_to_position(content, 9), Some(crate::buffer::Position::new(2, 4)));
+        assert_eq!(
+            index.offset_to_position(content, 0),
+            Some(crate::buffer::Position::new(1, 1))
+        );
+        assert_eq!(
+            index.offset_to_position(content, 2),
+            Some(crate::buffer::Position::new(1, 3))
+        );
+        assert_eq!(
+            index.offset_to_position(content, 6),
+            Some(crate::buffer::Position::new(2, 1))
+        );
+        assert_eq!(
+            index.offset_to_position(content, 9),
+            Some(crate::buffer::Position::new(2, 4))
+        );
     }
 }

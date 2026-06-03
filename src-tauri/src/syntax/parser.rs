@@ -24,7 +24,10 @@ impl SyntaxParser {
 
     /// Creates a new parser for the TypeScript language.
     pub fn for_typescript() -> Result<Self, String> {
-        Self::with_language(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(), "TypeScript")
+        Self::with_language(
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            "TypeScript",
+        )
     }
 
     fn with_language(language: Language, name: &str) -> Result<Self, String> {
@@ -76,7 +79,7 @@ mod tests {
 
         let root = parsed.tree.root_node();
         assert_eq!(root.kind(), "source_file");
-        assert!(root.has_error() == false);
+        assert!(!root.has_error());
     }
 
     #[test]
@@ -96,9 +99,7 @@ mod tests {
         let parsed1 = parser.parse(source1).unwrap();
 
         let source2 = "fn main() {\n    println!(\"hello world\");\n}";
-        let parsed2 = parser
-            .parse_incremental(source2, &parsed1.tree)
-            .unwrap();
+        let parsed2 = parser.parse_incremental(source2, &parsed1.tree).unwrap();
 
         let root = parsed2.tree.root_node();
         assert_eq!(root.kind(), "source_file");

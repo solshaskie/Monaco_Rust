@@ -230,6 +230,7 @@
       entries: [],
       tabs: [],
       isApplyingRemoteEdits: false,
+      wasmSync: null,
       tokenCache: new Map(),
       foldingCache: new Map(),
       semanticTokensCache: new Map(),
@@ -542,6 +543,11 @@
           }
         }).then(function (response) {
           state.currentVersionId = response.new_version_id;
+          if (state.wasmSync) {
+            state.wasmSync.refreshDebounced(state.currentPath).catch(function (error) {
+              console.warn("WASM sync refresh failed after edit", error);
+            });
+          }
           if (model.getLanguageId() === "rust" || model.getLanguageId() === "javascript" || model.getLanguageId() === "typescript") {
             fetchTokens(state.currentPath);
             fetchFoldingRanges(state.currentPath);
@@ -560,6 +566,13 @@
         name: basename(response.path),
         model: model
       });
+      if (state.wasmSync) {
+        try {
+          await state.wasmSync.prime(response.path);
+        } catch (error) {
+          console.warn("WASM sync prime failed", error);
+        }
+      }
       state.currentPath = response.path;
       state.currentVersionId = response.version_id || 1;
       state.editor.setModel(model);
@@ -1135,9 +1148,9 @@
 
           // Version guard: skip stale events
           var currentVersion = tab.model.getAlternativeVersionId();
-          if (payload.version_id < currentVersion) {
+          if (payload.version_id <= currentVersion) {
             console.log("Skipping stale buffer-content-changed for " + payload.path +
-              " (event v" + payload.version_id + " < current v" + currentVersion + ")");
+              " (event v" + payload.version_id + " <= current v" + currentVersion + ")");
             return;
           }
 
@@ -1158,6 +1171,11 @@
           try {
             tab.model.applyEdits(edits);
             state.currentVersionId = payload.version_id;
+            if (state.wasmSync) {
+              state.wasmSync.refreshDebounced(payload.path).catch(function (error) {
+                console.warn("WASM sync refresh failed after remote edit", error);
+              });
+            }
             console.log("Applied remote edits for " + payload.path +
               " (v" + payload.version_id + ", " + edits.length + " edits, undoing=" +
               payload.is_undoing + ", redoing=" + payload.is_redoing + ")");
@@ -1175,6 +1193,9 @@
         window.__TAURI__.event.listen("buffer-closed", function (event) {
           var payload = event.payload;
           if (!payload || !payload.path) return;
+          if (state.wasmSync) {
+            state.wasmSync.clear(payload.path);
+          }
           console.log("Buffer closed event:", payload.path);
         });
 
@@ -1207,17 +1228,20 @@
       // --- WASM Compute Module (W1.1) ---
       (async function initWASM() {
         try {
-          const { initWasmCompute, tokenize, computeDiff, computeLayout, computeVisibleLines, countLines } = await import('./wasm-glue.js');
-          await initWasmCompute();
+          const glue = await import('./wasm-glue.js');
+          const { WasmBufferSyncManager } = await import('./wasm-sync.js');
+          const wasmMod = await glue.initWasmCompute();
+          state.wasmSync = new WasmBufferSyncManager(invoke, wasmMod);
+          window.wasmBufferSync = state.wasmSync;
           console.log('[WASM] Compute module loaded');
 
           // Expose for debugging / testing
           window.wasmCompute = {
-            tokenize: (src, lang) => tokenize(src, lang),
-            diff: (old, neu) => computeDiff(old, neu),
-            layout: (src, w) => computeLayout(src, w),
-            visibleLines: (src, lh, st, vh) => computeVisibleLines(src, lh, st, vh),
-            countLines: (src) => countLines(src),
+            tokenize: (src, lang) => glue.tokenize(src, lang),
+            diff: (old, neu) => glue.computeDiff(old, neu),
+            layout: (src, w) => glue.computeLayout(src, w),
+            visibleLines: (src, lh, st, vh) => glue.computeVisibleLines(src, lh, st, vh),
+            countLines: (src) => glue.countLines(src),
           };
 
           // Register WASM-backed semantic token provider (W1.2)

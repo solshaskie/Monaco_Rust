@@ -1,4 +1,31 @@
 /**
+ * Parse a compact binary delta or snapshot from Rust `wasm_sync`.
+ *
+ * The binary format is:
+ * - mode 0 (noop): `[0]`
+ * - mode 1 (delta): `[1][version_id:8LE][start_line:4LE][end_line:4LE][text_len:4LE][text:utf8]`
+ * - mode 2 (snapshot): `[2][version_id:8LE][line_count:4LE][text_len:4LE][text:utf8]`
+ *
+ * Returns a JS object with `mode` and optional fields.
+ * @param {object} buffer
+ * @returns {any}
+ */
+export function apply_binary_delta(buffer) {
+    const ret = wasm.apply_binary_delta(buffer);
+    if (ret[2]) {
+        throw takeFromExternrefTable0(ret[1]);
+    }
+    return takeFromExternrefTable0(ret[0]);
+}
+
+/**
+ * Clear the entire token cache.
+ */
+export function clear_token_cache() {
+    wasm.clear_token_cache();
+}
+
+/**
  * Compute a line-based diff between old_text and new_text.
  * Returns a JSON array of edit objects:
  * { "start_line": 0, "start_column": 0, "end_line": 0, "end_column": 0, "text": "..." }
@@ -101,6 +128,66 @@ export function count_lines(source) {
 }
 
 /**
+ * Return the current WASM memory size in pages (64 KiB per page).
+ * @returns {number}
+ */
+export function current_memory_pages() {
+    const ret = wasm.current_memory_pages();
+    return ret >>> 0;
+}
+
+/**
+ * Remove a single resource from the token cache.
+ * @param {string} resource
+ */
+export function invalidate_token_cache(resource) {
+    const ptr0 = passStringToWasm0(resource, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    wasm.invalidate_token_cache(ptr0, len0);
+}
+
+/**
+ * Pre-grow the WASM linear memory by `additional_pages` (64 KiB each).
+ *
+ * Call this before loading large buffers to avoid reallocation stalls
+ * during compute operations. Returns the previous page count.
+ *
+ * # Example
+ * - `preallocate_memory(256)` adds 16 MiB (256 × 64 KiB).
+ * - The max allowed is governed by `--max-memory` at link time
+ *   (currently 128 MiB = 2048 pages; see `wasm/.cargo/config.toml`).
+ *
+ * # Panics
+ * Panics if the grow exceeds `--max-memory` or if the memory object is
+ * unavailable (should never happen in practice).
+ * @param {number} additional_pages
+ * @returns {number}
+ */
+export function preallocate_memory(additional_pages) {
+    const ret = wasm.preallocate_memory(additional_pages);
+    return ret >>> 0;
+}
+
+/**
+ * Prime the token cache for a resource. Tokenizes the full source and stores
+ * it keyed by `resource`. Returns the number of tokens cached.
+ * @param {string} resource
+ * @param {string} source
+ * @param {string} language
+ * @returns {number}
+ */
+export function prime_token_cache(resource, source, language) {
+    const ptr0 = passStringToWasm0(resource, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passStringToWasm0(language, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.prime_token_cache(ptr0, len0, ptr1, len1, ptr2, len2);
+    return ret >>> 0;
+}
+
+/**
  * Read a UTF-8 string from a JS Uint8Array (or SharedArrayBuffer-backed view)
  * at the given offset and length. This avoids JSON serialization for large buffers.
  * @param {object} buffer
@@ -135,6 +222,15 @@ export function start() {
 }
 
 /**
+ * Return the number of cached resources.
+ * @returns {number}
+ */
+export function token_cache_len() {
+    const ret = wasm.token_cache_len();
+    return ret >>> 0;
+}
+
+/**
  * Tokenize a source string and return a JSON array of token objects.
  * Each token: { "text": "...", "type": "...", "line": 0, "start": 0, "end": 0 }
  * @param {string} source
@@ -161,6 +257,39 @@ export function tokenize(source, language) {
         return getStringFromWasm0(ptr3, len3);
     } finally {
         wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+    }
+}
+
+/**
+ * Tokenize a source string, using the cache when the snapshot is unchanged.
+ * Returns a JSON array of token objects.
+ * @param {string} source
+ * @param {string} language
+ * @param {string} resource
+ * @returns {string}
+ */
+export function tokenize_cached(source, language, resource) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(language, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(resource, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.tokenize_cached(ptr0, len0, ptr1, len1, ptr2, len2);
+        var ptr4 = ret[0];
+        var len4 = ret[1];
+        if (ret[3]) {
+            ptr4 = 0; len4 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
     }
 }
 
@@ -197,6 +326,41 @@ export function tokenize_range(source, language, start_line, end_line) {
 }
 
 /**
+ * Tokenize a range of lines, using the full-file cache when possible.
+ * Returns a JSON array of token objects.
+ * @param {string} source
+ * @param {string} language
+ * @param {string} resource
+ * @param {number} start_line
+ * @param {number} end_line
+ * @returns {string}
+ */
+export function tokenize_range_cached(source, language, resource, start_line, end_line) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(language, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(resource, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.tokenize_range_cached(ptr0, len0, ptr1, len1, ptr2, len2, start_line, end_line);
+        var ptr4 = ret[0];
+        var len4 = ret[1];
+        if (ret[3]) {
+            ptr4 = 0; len4 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred5_0 = ptr4;
+        deferred5_1 = len4;
+        return getStringFromWasm0(ptr4, len4);
+    } finally {
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+    }
+}
+
+/**
  * Write a UTF-8 string into a JS Uint8Array (or SharedArrayBuffer-backed view)
  * at the given offset. Returns the number of bytes written.
  * @param {object} buffer
@@ -216,8 +380,52 @@ export function write_string_to_buffer(buffer, offset, text) {
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
+        __wbg_Error_ef53bc310eb298a0: function(arg0, arg1) {
+            const ret = Error(getStringFromWasm0(arg0, arg1));
+            return ret;
+        },
+        __wbg_String_8564e559799eccda: function(arg0, arg1) {
+            const ret = String(arg1);
+            const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+        },
+        __wbg___wbindgen_debug_string_0accd80f45e5faa2: function(arg0, arg1) {
+            const ret = debugString(arg1);
+            const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+        },
+        __wbg___wbindgen_memory_fbc4c3e30b409f08: function() {
+            const ret = wasm.memory;
+            return ret;
+        },
         __wbg___wbindgen_throw_1506f2235d1bdba0: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
+        },
+        __wbg_buffer_a1f116eb4fdb1531: function(arg0) {
+            const ret = arg0.buffer;
+            return ret;
+        },
+        __wbg_byteLength_ce8888385b6e4a8d: function(arg0) {
+            const ret = arg0.byteLength;
+            return ret;
+        },
+        __wbg_grow_675cdab766668c89: function(arg0, arg1) {
+            const ret = arg0.grow(arg1 >>> 0);
+            return ret;
+        },
+        __wbg_instanceof_Memory_4a1ccdf34cc1269b: function(arg0) {
+            let result;
+            try {
+                result = arg0 instanceof WebAssembly.Memory;
+            } catch (_) {
+                result = false;
+            }
+            const ret = result;
+            return ret;
         },
         __wbg_length_4a591ecaa01354d9: function(arg0) {
             const ret = arg0.length;
@@ -227,19 +435,36 @@ function __wbg_get_imports() {
             const ret = new Uint8Array(arg0);
             return ret;
         },
+        __wbg_new_ce1ab61c1c2b300d: function() {
+            const ret = new Object();
+            return ret;
+        },
         __wbg_prototypesetcall_3249fc62a0fafa30: function(arg0, arg1, arg2) {
             Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), arg2);
         },
         __wbg_set_29c99a8aac1c01e5: function(arg0, arg1, arg2) {
             arg0.set(getArrayU8FromWasm0(arg1, arg2));
         },
+        __wbg_set_6be42768c690e380: function(arg0, arg1, arg2) {
+            arg0[arg1] = arg2;
+        },
         __wbg_slice_c87a896d40083a6c: function(arg0, arg1, arg2) {
             const ret = arg0.slice(arg1 >>> 0, arg2 >>> 0);
             return ret;
         },
-        __wbindgen_cast_0000000000000001: function(arg0, arg1) {
+        __wbindgen_cast_0000000000000001: function(arg0) {
+            // Cast intrinsic for `F64 -> Externref`.
+            const ret = arg0;
+            return ret;
+        },
+        __wbindgen_cast_0000000000000002: function(arg0, arg1) {
             // Cast intrinsic for `Ref(String) -> Externref`.
             const ret = getStringFromWasm0(arg0, arg1);
+            return ret;
+        },
+        __wbindgen_cast_0000000000000003: function(arg0) {
+            // Cast intrinsic for `U64 -> Externref`.
+            const ret = BigInt.asUintN(64, arg0);
             return ret;
         },
         __wbindgen_init_externref_table: function() {
@@ -258,9 +483,82 @@ function __wbg_get_imports() {
     };
 }
 
+function debugString(val) {
+    // primitive types
+    const type = typeof val;
+    if (type == 'number' || type == 'boolean' || val == null) {
+        return  `${val}`;
+    }
+    if (type == 'string') {
+        return `"${val}"`;
+    }
+    if (type == 'symbol') {
+        const description = val.description;
+        if (description == null) {
+            return 'Symbol';
+        } else {
+            return `Symbol(${description})`;
+        }
+    }
+    if (type == 'function') {
+        const name = val.name;
+        if (typeof name == 'string' && name.length > 0) {
+            return `Function(${name})`;
+        } else {
+            return 'Function';
+        }
+    }
+    // objects
+    if (Array.isArray(val)) {
+        const length = val.length;
+        let debug = '[';
+        if (length > 0) {
+            debug += debugString(val[0]);
+        }
+        for(let i = 1; i < length; i++) {
+            debug += ', ' + debugString(val[i]);
+        }
+        debug += ']';
+        return debug;
+    }
+    // Test for built-in
+    const builtInMatches = /\[object ([^\]]+)\]/.exec(toString.call(val));
+    let className;
+    if (builtInMatches && builtInMatches.length > 1) {
+        className = builtInMatches[1];
+    } else {
+        // Failed to match the standard '[object ClassName]'
+        return toString.call(val);
+    }
+    if (className == 'Object') {
+        // we're a user defined class or Object
+        // JSON.stringify avoids problems with cycles, and is generally much
+        // easier than looping through ownProperties of `val`.
+        try {
+            return 'Object(' + JSON.stringify(val) + ')';
+        } catch (_) {
+            return 'Object';
+        }
+    }
+    // errors
+    if (val instanceof Error) {
+        return `${val.name}: ${val.message}\n${val.stack}`;
+    }
+    // TODO we could test for more things here, like `Set`s and `Map`s.
+    return className;
+}
+
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
+}
+
+let cachedDataViewMemory0 = null;
+function getDataViewMemory0() {
+    if (cachedDataViewMemory0 === null || cachedDataViewMemory0.buffer.detached === true || (cachedDataViewMemory0.buffer.detached === undefined && cachedDataViewMemory0.buffer !== wasm.memory.buffer)) {
+        cachedDataViewMemory0 = new DataView(wasm.memory.buffer);
+    }
+    return cachedDataViewMemory0;
 }
 
 function getStringFromWasm0(ptr, len) {
@@ -352,6 +650,7 @@ function __wbg_finalize_init(instance, module) {
     wasmInstance = instance;
     wasm = instance.exports;
     wasmModule = module;
+    cachedDataViewMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;

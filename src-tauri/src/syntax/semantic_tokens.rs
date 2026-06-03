@@ -34,7 +34,8 @@ pub fn pack_semantic_tokens(tokens: &[SyntaxToken]) -> Vec<u32> {
 
     let mut sorted = tokens.to_vec();
     sorted.sort_by(|a, b| {
-        a.start_line.cmp(&b.start_line)
+        a.start_line
+            .cmp(&b.start_line)
             .then_with(|| a.start_column.cmp(&b.start_column))
     });
 
@@ -48,7 +49,7 @@ pub fn pack_semantic_tokens(tokens: &[SyntaxToken]) -> Vec<u32> {
         } else {
             token.start_column.saturating_sub(1)
         };
-        let length = (token.end_column.saturating_sub(token.start_column)) as u32;
+        let length = token.end_column.saturating_sub(token.start_column);
         let type_index = token_type_index(&token.token_type);
 
         data.push(delta_line);

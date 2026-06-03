@@ -65,6 +65,8 @@ Monaco_Rust is a local-first Monaco/Tauri editor experiment where Rust owns buff
 - The repo posture is now fully emancipated from Node-era project tooling. Browser JS remains as checked-in runtime assets, but build/package orchestration is Rust/shell owned.
 - `HYDRATION.md` is now calibrated to current repo truth; older counts and blanket “all phases complete” language were removed because they had drifted.
 
+- A full-spectrum adversarial review ([ADVERSARIAL_REVIEW.md](cci:7://file:///data/projects/Monaco_Rust/ADVERSARIAL_REVIEW.md:0:0-0:0), generated 2026-06-03) identified 10 P0 issues, 37 P1 issues, and 47+ P2 issues. The remediation path is captured in [ADVERSARIAL_ROADMAP.md](cci:7://file:///data/projects/Monaco_Rust/ADVERSARIAL_ROADMAP.md:0:0-0:0).
+
 ## Resume Path
 
 1. Run `cd src-tauri && cargo test --all-targets`.

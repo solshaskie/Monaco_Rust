@@ -3,10 +3,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use crate::buffer::{BufferRegistry, ContentChange, Position};
+use crate::lsp::LspRegistry;
 use crate::proto::code::ipc::editor;
 use crate::proto::code::ipc::editor::host;
 use crate::proto::code::ipc::file;
-use crate::security::{CapabilityRegistry, Permission, Principal, PrincipalKind, SecuritySandbox, SandboxLimits};
+use crate::security::{
+    CapabilityRegistry, Permission, Principal, PrincipalKind, SandboxLimits, SecuritySandbox,
+};
 
 /// Default principal for built-in editor operations (the user).
 const DEFAULT_PRINCIPAL: &str = "user";
@@ -16,6 +19,13 @@ pub struct MonacoHostState {
     buffer_registry: RwLock<BufferRegistry>,
     sandbox: Arc<SecuritySandbox>,
     capabilities: Arc<CapabilityRegistry>,
+    lsp_registry: RwLock<LspRegistry>,
+}
+
+impl Default for MonacoHostState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MonacoHostState {
@@ -57,11 +67,23 @@ impl MonacoHostState {
             ],
         );
 
+        let workspace_root = roots
+            .iter()
+            .find(|r| r.is_primary)
+            .and_then(|r| r.resource.as_ref())
+            .map(|r| r.path.clone())
+            .unwrap_or_else(|| {
+                std::env::current_dir()
+                    .map(|d| d.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            });
+
         Self {
             workspace_roots: RwLock::new(roots),
             buffer_registry: RwLock::new(BufferRegistry::new()),
             sandbox,
             capabilities,
+            lsp_registry: RwLock::new(LspRegistry::new(workspace_root)),
         }
     }
 
@@ -119,6 +141,10 @@ impl MonacoHostState {
     pub fn buffer_registry(&self) -> &RwLock<BufferRegistry> {
         &self.buffer_registry
     }
+
+    pub fn lsp_registry(&self) -> &RwLock<LspRegistry> {
+        &self.lsp_registry
+    }
 }
 
 pub fn get_workspace_roots(state: &MonacoHostState) -> host::GetWorkspaceRootsResponse {
@@ -157,7 +183,10 @@ pub fn open_document(
 
     // Security: check read permission
     let principal = default_principal();
-    if !state.capabilities.check(&principal, Permission::ReadFile, &resource.path) {
+    if !state
+        .capabilities
+        .check(&principal, Permission::ReadFile, &resource.path)
+    {
         return Err("permission denied: read_file".to_string());
     }
 
@@ -210,14 +239,22 @@ pub fn open_document(
         let mut registry = state.buffer_registry.write().map_err(|e| e.to_string())?;
         registry.open_buffer_from_bytes(resource.path.clone(), &content)?;
     }
-    state.sandbox.record_buffer_opened(DEFAULT_PRINCIPAL, content.len());
+    state
+        .sandbox
+        .record_buffer_opened(DEFAULT_PRINCIPAL, content.len());
 
     let stat = build_file_stat(&path)?;
     let language_id = if request.preferred_language_id.is_empty() {
         detect_language_id(&path)
     } else {
-        request.preferred_language_id
+        request.preferred_language_id.clone()
     };
+
+    // Notify LSP server that document was opened
+    if let Ok(mut lsp) = state.lsp_registry.write() {
+        let text = String::from_utf8_lossy(&content).to_string();
+        lsp.did_open(&resource.path, &language_id, 1, &text);
+    }
 
     Ok(host::OpenDocumentResponse {
         snapshot: Some(editor::BufferSnapshot {
@@ -258,10 +295,16 @@ pub fn save_document(
     }
 
     if path.exists() && !request.overwrite {
-        return Err(format!("refusing to overwrite existing file: {}", path.display()));
+        return Err(format!(
+            "refusing to overwrite existing file: {}",
+            path.display()
+        ));
     }
     if !path.exists() && !request.create {
-        return Err(format!("refusing to create missing file: {}", path.display()));
+        return Err(format!(
+            "refusing to create missing file: {}",
+            path.display()
+        ));
     }
 
     if let Some(parent) = path.parent() {
@@ -324,8 +367,8 @@ pub fn save_document_as(
         }
 
         // Open new buffer
-        let content_str = String::from_utf8(content)
-            .map_err(|e| format!("Invalid UTF-8 content: {}", e))?;
+        let content_str =
+            String::from_utf8(content).map_err(|e| format!("Invalid UTF-8 content: {}", e))?;
         registry.open_buffer(target.path.clone(), &content_str);
     }
 
@@ -356,7 +399,12 @@ pub fn close_document(
 
     // If save_if_dirty and buffer is dirty, save first
     if request.save_if_dirty && is_dirty {
-        if let Some(snapshot) = state.buffer_registry.read().map_err(|e| e.to_string())?.get_buffer_snapshot(&resource.path) {
+        if let Some(snapshot) = state
+            .buffer_registry
+            .read()
+            .map_err(|e| e.to_string())?
+            .get_buffer_snapshot(&resource.path)
+        {
             let path = uri_to_path(&resource)?;
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).map_err(|err| err.to_string())?;
@@ -365,9 +413,18 @@ pub fn close_document(
         }
     }
 
+    // Notify LSP server that document was closed
+    let language_id = detect_language_id_from_path(&resource.path);
+    if let Ok(mut lsp) = state.lsp_registry.write() {
+        lsp.did_close(&resource.path, &language_id);
+    }
+
     // Close the buffer
     let mut registry = state.buffer_registry.write().map_err(|e| e.to_string())?;
-    let size = registry.get_buffer_content(&resource.path).map(|c| c.len()).unwrap_or(0);
+    let size = registry
+        .get_buffer_content(&resource.path)
+        .map(|c| c.len())
+        .unwrap_or(0);
     let closed = registry.close_buffer(&resource.path);
     state.sandbox.record_buffer_closed(DEFAULT_PRINCIPAL, size);
 
@@ -387,7 +444,10 @@ pub fn apply_edits(
 
     // Security: check write permission
     let principal = default_principal();
-    if !state.capabilities.check(&principal, Permission::WriteFile, &resource.path) {
+    if !state
+        .capabilities
+        .check(&principal, Permission::WriteFile, &resource.path)
+    {
         return Err("permission denied: write_file".to_string());
     }
 
@@ -424,6 +484,29 @@ pub fn apply_edits(
         if let Some(event) = registry.apply_edit(&resource.path, change) {
             new_version_id = event.version_id;
             applied_changes.push(event.changes.clone());
+        }
+    }
+    drop(registry);
+
+    // Notify LSP server of document change
+    if new_version_id > 0 {
+        if let Ok(registry) = state.buffer_registry.read() {
+            if let Some(content) = registry.get_buffer_content(&resource.path) {
+                let language_id = detect_language_id_from_path(&resource.path);
+                if let Ok(mut lsp) = state.lsp_registry.write() {
+                    let change_json = serde_json::json!({
+                        "range": null,
+                        "rangeLength": null,
+                        "text": content,
+                    });
+                    lsp.did_change(
+                        &resource.path,
+                        &language_id,
+                        new_version_id as i32,
+                        vec![change_json],
+                    );
+                }
+            }
         }
     }
 
@@ -495,7 +578,32 @@ pub fn undo(
     }
     drop(registry);
 
-    let event = state.buffer_registry.read().map_err(|e| e.to_string())?.undo(&resource.path);
+    let event = state
+        .buffer_registry
+        .read()
+        .map_err(|e| e.to_string())?
+        .undo(&resource.path);
+
+    if let Some(ref e) = event {
+        if let Ok(registry) = state.buffer_registry.read() {
+            if let Some(content) = registry.get_buffer_content(&resource.path) {
+                let language_id = detect_language_id_from_path(&resource.path);
+                if let Ok(mut lsp) = state.lsp_registry.write() {
+                    let change_json = serde_json::json!({
+                        "range": null,
+                        "rangeLength": null,
+                        "text": content,
+                    });
+                    lsp.did_change(
+                        &resource.path,
+                        &language_id,
+                        e.version_id as i32,
+                        vec![change_json],
+                    );
+                }
+            }
+        }
+    }
 
     Ok(host::UndoResponse {
         success: event.is_some(),
@@ -533,7 +641,32 @@ pub fn redo(
     }
     drop(registry);
 
-    let event = state.buffer_registry.read().map_err(|e| e.to_string())?.redo(&resource.path);
+    let event = state
+        .buffer_registry
+        .read()
+        .map_err(|e| e.to_string())?
+        .redo(&resource.path);
+
+    if let Some(ref e) = event {
+        if let Ok(registry) = state.buffer_registry.read() {
+            if let Some(content) = registry.get_buffer_content(&resource.path) {
+                let language_id = detect_language_id_from_path(&resource.path);
+                if let Ok(mut lsp) = state.lsp_registry.write() {
+                    let change_json = serde_json::json!({
+                        "range": null,
+                        "rangeLength": null,
+                        "text": content,
+                    });
+                    lsp.did_change(
+                        &resource.path,
+                        &language_id,
+                        e.version_id as i32,
+                        vec![change_json],
+                    );
+                }
+            }
+        }
+    }
 
     Ok(host::RedoResponse {
         success: event.is_some(),
@@ -651,7 +784,11 @@ fn path_to_uri(path: &Path) -> file::Uri {
 }
 
 fn detect_language_id(path: &Path) -> String {
-    match path.extension().and_then(|value| value.to_str()).unwrap_or("") {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+    {
         "rs" => "rust",
         "ts" | "tsx" => "typescript",
         "js" | "mjs" | "cjs" => "javascript",
@@ -664,6 +801,10 @@ fn detect_language_id(path: &Path) -> String {
         _ => "plaintext",
     }
     .to_string()
+}
+
+fn detect_language_id_from_path(path: &str) -> String {
+    detect_language_id(Path::new(path))
 }
 
 fn detect_eol(path: &Path) -> String {
@@ -750,7 +891,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(opened.snapshot.as_ref().unwrap().content_utf8, b"initial content");
+        assert_eq!(
+            opened.snapshot.as_ref().unwrap().content_utf8,
+            b"initial content"
+        );
 
         // Apply an edit
         let edits_response = apply_edits(

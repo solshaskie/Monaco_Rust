@@ -3,6 +3,8 @@
 > **Purpose:** Turn the findings in [`ADVERSARIAL_REVIEW.md`](./ADVERSARIAL_REVIEW.md) into a sequenced, observable plan. Each phase maps to a sprint in the review's "Path to v1" (§7.3).
 > **Status:** Not started.
 > **Last updated:** 2026-06-03
+>
+> This is a hardening backlog derived from an adversarial review. It is not the canonical project roadmap and should not outrank `README.md`, `HYDRATION.md`, `PHASED_ROADMAP.md`, or `WASM_ROADMAP.md`. Use it as a pressure-tested remediation queue, then reconcile each item with current repo truth before treating it as committed direction.
 
 ---
 
@@ -10,7 +12,7 @@
 
 The adversarial review (generated 2026-06-03 against `57cfbb6f`) found **10 P0 issues** (exploitable / corrupting / blocking), **37 P1 issues** (material correctness or performance), and **47+ P2 issues** (quality / ergonomics). The Rust substrate is real and well-organized (167 verified tests), but the runtime has security holes, an O(N²) per-keystroke cost center, a full-document LSP `didChange` on every edit, and prototype-grade WASM/JS.
 
-This roadmap treats the review as the spec. Every item below references the original finding by section.
+This roadmap treats the review as input, not as sovereign truth. Every item below references the original finding by section, but stale or already-addressed items should be corrected instead of carried forward mechanically.
 
 ---
 
@@ -18,24 +20,24 @@ This roadmap treats the review as the spec. Every item below references the orig
 
 | Area | Current State | Target |
 |------|---------------|--------|
-| Path containment | None; `uri_to_path` is `PathBuf::from` | Canonicalized workspace-root check |
+| Path containment | No durable workspace-root enforcement is documented or clearly proved in current repo truth | Canonicalized workspace-root check |
 | Optimistic edit race | TOCTOU read-then-write | Single write-lock atomic check |
 | LSP shutdown | `Drop` blocks 5s on dead server | Non-blocking / timeout |
 | LSP `didChange` | Full document replacement every keystroke | Incremental range per spec |
 | `save_document_as` | No `did_close`/`did_open` | LSP state stays synchronized |
 | Symlink handling | Follows symlinks on write | Reject symlinks in write path |
-| Remote edit guard | Single global boolean | Per-buffer `Set<String>` |
+| Remote edit guard | Needs live verification against current frontend state; earlier single-boolean posture may already be stale | Per-buffer `Set<String>` |
 | Dual IPC encoding | 36 handlers (18 logical × JSON + protobuf) | One encoding, one handler set |
 | `LineIndex` | Rebuilt O(N²) on every edit | Incremental update O(Δ) |
 | WASM tokenizer | Hand-rolled heuristic | `web-tree-sitter` parity with native |
-| Event subscriptions | `EventSubscriptionTracker` dead code | Wired or removed |
+| Event subscriptions | Review claims dead code; confirm against current repo before remediation | Wired or removed |
 | MCP tool registry | Rebuilt on every call | Cached in `MonacoHostState` |
 
 ---
 
 ## Phase A: Security + Correctness
 
-**Goal:** Close the 10 P0 issues before any other work. This is the sprint the review calls "about 1 week."
+**Goal:** Close the highest-confidence security/correctness issues first. This phase should be driven by verified repo truth, not only by the adversarial labels.
 
 ### A.1 Path Containment
 **Files:** `src-tauri/src/host_handlers.rs`, `src-tauri/src/security/capabilities.rs`
@@ -86,7 +88,8 @@ This roadmap treats the review as the spec. Every item below references the orig
 ### A.6 Per-Buffer Remote Edit Guard
 **File:** `tauri/index.html`
 
-- [ ] Replace `state.isApplyingRemoteEdits: boolean` with `state.remoteEditPaths: Set<string>`
+- [ ] Re-verify the current remote-edit guard implementation in `tauri/index.html`
+- [ ] If still global, replace it with `state.remoteEditPaths: Set<string>`
 - [ ] Guard `invoke("apply_edits_json")` per buffer path
 
 **Success Criteria:**
@@ -96,7 +99,8 @@ This roadmap treats the review as the spec. Every item below references the orig
 ### A.7 Event Subscription Tracker — Wire or Remove
 **File:** `src-tauri/src/events.rs`
 
-- [ ] Either integrate `EventSubscriptionTracker` into the Tauri `emit` path, or delete it and its tests
+- [ ] Reconfirm that `EventSubscriptionTracker` is still unused in current repo truth
+- [ ] Either integrate it into the Tauri `emit` path, or delete it and its tests
 
 **Success Criteria:**
 - No dead code that is tested but unused

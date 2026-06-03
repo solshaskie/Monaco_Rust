@@ -1,6 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use prost::Message;
 use monaco_tauri::events::{
     BufferChangeEvent, BufferClosedEvent, BufferContentChangedEvent, BufferOpenedEvent,
     BufferSavedEvent, EventBroadcaster,
@@ -9,6 +8,8 @@ use monaco_tauri::host_handlers;
 use monaco_tauri::host_handlers::MonacoHostState;
 use monaco_tauri::proto::code::ipc::editor::host;
 use monaco_tauri::proto::code::ipc::file;
+use monaco_tauri::wasm_sync;
+use prost::Message;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
 
@@ -259,6 +260,59 @@ struct CompletionJsonResponse {
     version_id: u64,
 }
 
+#[derive(Deserialize)]
+struct CodeActionJsonRequest {
+    path: String,
+    start_line: u32,
+    start_column: u32,
+    end_line: u32,
+    end_column: u32,
+    kind_filter: String,
+}
+
+#[derive(Serialize)]
+struct CodeActionJson {
+    title: String,
+    kind: String,
+    is_preferred: bool,
+}
+
+#[derive(Serialize)]
+struct CodeActionJsonResponse {
+    version_id: u64,
+    actions: Vec<CodeActionJson>,
+}
+
+#[derive(Deserialize)]
+struct WasmSyncStateJsonRequest {
+    path: String,
+    previous_content: Option<String>,
+    previous_version_id: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct WasmSyncSnapshotJson {
+    path: String,
+    content: String,
+    version_id: u64,
+    line_count: usize,
+}
+
+#[derive(Serialize)]
+struct WasmSyncDeltaJson {
+    start_line: usize,
+    end_line: usize,
+    text: String,
+    version_id: u64,
+}
+
+#[derive(Serialize)]
+struct WasmSyncStateJsonResponse {
+    mode: String,
+    snapshot: Option<WasmSyncSnapshotJson>,
+    delta: Option<WasmSyncDeltaJson>,
+}
+
 #[derive(Serialize, Clone)]
 struct DiagnosticsChangedEvent {
     path: String,
@@ -304,7 +358,11 @@ fn list_directory_json(
         id: "user".to_string(),
         kind: monaco_tauri::security::PrincipalKind::User,
     };
-    if !state.capabilities().check(&principal, monaco_tauri::security::Permission::ListDirectory, &path) {
+    if !state.capabilities().check(
+        &principal,
+        monaco_tauri::security::Permission::ListDirectory,
+        &path,
+    ) {
         return Err("permission denied: list_directory".to_string());
     }
 
@@ -324,7 +382,10 @@ fn list_directory_json(
                     .as_ref()
                     .and_then(|value| value.resource.as_ref())
                     .map(|resource| resource.path.clone()),
-                is_directory: stat.as_ref().map(|value| value.is_directory).unwrap_or(false),
+                is_directory: stat
+                    .as_ref()
+                    .map(|value| value.is_directory)
+                    .unwrap_or(false),
                 size: stat.as_ref().map(|value| value.size).unwrap_or_default(),
             }
         })
@@ -337,11 +398,14 @@ fn open_document_json(
     state: State<MonacoHostState>,
     path: String,
 ) -> Result<OpenDocumentJson, String> {
-    let response = host_handlers::open_document(&state, host::OpenDocumentRequest {
-        resource: Some(file_uri_from_path(&path)),
-        create_if_missing: false,
-        preferred_language_id: String::new(),
-    })?;
+    let response = host_handlers::open_document(
+        &state,
+        host::OpenDocumentRequest {
+            resource: Some(file_uri_from_path(&path)),
+            create_if_missing: false,
+            preferred_language_id: String::new(),
+        },
+    )?;
     let snapshot = response
         .snapshot
         .ok_or_else(|| "missing snapshot in open document response".to_string())?;
@@ -367,18 +431,21 @@ fn save_document_json(
     state: State<MonacoHostState>,
     request: SaveDocumentJsonRequest,
 ) -> Result<u64, String> {
-    let response = host_handlers::save_document(&state, host::SaveDocumentRequest {
-        snapshot: Some(monaco_tauri::proto::code::ipc::editor::BufferSnapshot {
-            resource: Some(file_uri_from_path(&request.path)),
-            version_id: request.version_id,
-            content_utf8: request.content.into_bytes(),
-            eol: "\n".to_string(),
-            is_dirty: true,
-        }),
-        create: true,
-        overwrite: true,
-        etag: String::new(),
-    })?;
+    let response = host_handlers::save_document(
+        &state,
+        host::SaveDocumentRequest {
+            snapshot: Some(monaco_tauri::proto::code::ipc::editor::BufferSnapshot {
+                resource: Some(file_uri_from_path(&request.path)),
+                version_id: request.version_id,
+                content_utf8: request.content.into_bytes(),
+                eol: "\n".to_string(),
+                is_dirty: true,
+            }),
+            create: true,
+            overwrite: true,
+            etag: String::new(),
+        },
+    )?;
     EventBroadcaster::emit_buffer_saved(
         &app,
         BufferSavedEvent {
@@ -445,10 +512,13 @@ fn close_document_json(
     state: State<MonacoHostState>,
     request: CloseDocumentJsonRequest,
 ) -> Result<CloseDocumentJsonResponse, String> {
-    let response = host_handlers::close_document(&state, host::CloseDocumentRequest {
-        resource: Some(file_uri_from_path(&request.path)),
-        save_if_dirty: request.save_if_dirty,
-    })?;
+    let response = host_handlers::close_document(
+        &state,
+        host::CloseDocumentRequest {
+            resource: Some(file_uri_from_path(&request.path)),
+            save_if_dirty: request.save_if_dirty,
+        },
+    )?;
     EventBroadcaster::emit_buffer_closed(
         &app,
         BufferClosedEvent {
@@ -490,20 +560,25 @@ fn apply_edits_json(
     let edits: Vec<monaco_tauri::proto::code::ipc::editor::ModelContentChange> = request
         .edits
         .into_iter()
-        .map(|edit| monaco_tauri::proto::code::ipc::editor::ModelContentChange {
-            start_line: edit.start_line,
-            start_column: edit.start_column,
-            end_line: edit.end_line,
-            end_column: edit.end_column,
-            range_offset: edit.range_offset,
-            range_length: edit.range_length,
-            text_utf8: edit.text.into_bytes(),
-        })
+        .map(
+            |edit| monaco_tauri::proto::code::ipc::editor::ModelContentChange {
+                start_line: edit.start_line,
+                start_column: edit.start_column,
+                end_line: edit.end_line,
+                end_column: edit.end_column,
+                range_offset: edit.range_offset,
+                range_length: edit.range_length,
+                text_utf8: edit.text.into_bytes(),
+            },
+        )
         .collect();
-    let response = host_handlers::apply_edits(&state, host::ApplyEditsRequest {
-        resource: Some(file_uri_from_path(&request.path)),
-        edits,
-    })?;
+    let response = host_handlers::apply_edits(
+        &state,
+        host::ApplyEditsRequest {
+            resource: Some(file_uri_from_path(&request.path)),
+            edits,
+        },
+    )?;
 
     // Emit buffer content changed event for multi-view sync
     EventBroadcaster::emit_buffer_content_changed(
@@ -518,9 +593,11 @@ fn apply_edits_json(
     );
 
     // Push diagnostics after edit
+    let mut lsp = state.lsp_registry().write().map_err(|e| e.to_string())?;
     let registry = state.buffer_registry().read().map_err(|e| e.to_string())?;
     if let Ok(diag_response) = monaco_tauri::syntax_handlers::diagnostics_document(
         &registry,
+        Some(&mut lsp),
         monaco_tauri::proto::code::ipc::editor::language::DiagnosticRequest {
             resource: Some(file_uri_from_path(&request.path)),
             version_id: 0,
@@ -576,9 +653,12 @@ fn undo_json(
     state: State<MonacoHostState>,
     request: UndoRedoJsonRequest,
 ) -> Result<UndoRedoJsonResponse, String> {
-    let response = host_handlers::undo(&state, host::UndoRequest {
-        resource: Some(file_uri_from_path(&request.path)),
-    })?;
+    let response = host_handlers::undo(
+        &state,
+        host::UndoRequest {
+            resource: Some(file_uri_from_path(&request.path)),
+        },
+    )?;
     let changes: Vec<EditChangeJson> = response
         .changes
         .iter()
@@ -635,9 +715,12 @@ fn redo_json(
     state: State<MonacoHostState>,
     request: UndoRedoJsonRequest,
 ) -> Result<UndoRedoJsonResponse, String> {
-    let response = host_handlers::redo(&state, host::RedoRequest {
-        resource: Some(file_uri_from_path(&request.path)),
-    })?;
+    let response = host_handlers::redo(
+        &state,
+        host::RedoRequest {
+            resource: Some(file_uri_from_path(&request.path)),
+        },
+    )?;
     let changes: Vec<EditChangeJson> = response
         .changes
         .iter()
@@ -846,8 +929,10 @@ fn diagnostics_document_json(
     request: DiagnosticJsonRequest,
 ) -> Result<DiagnosticJsonResponse, String> {
     let registry = state.buffer_registry().read().map_err(|e| e.to_string())?;
+    let mut lsp = state.lsp_registry().write().map_err(|e| e.to_string())?;
     let response = monaco_tauri::syntax_handlers::diagnostics_document(
         &registry,
+        Some(&mut lsp),
         monaco_tauri::proto::code::ipc::editor::language::DiagnosticRequest {
             resource: Some(file_uri_from_path(&request.path)),
             version_id: 0,
@@ -887,7 +972,9 @@ fn document_symbols_document_json(
         },
     )?;
 
-    fn convert(s: monaco_tauri::proto::code::ipc::editor::language::DocumentSymbol) -> DocumentSymbolJson {
+    fn convert(
+        s: monaco_tauri::proto::code::ipc::editor::language::DocumentSymbol,
+    ) -> DocumentSymbolJson {
         DocumentSymbolJson {
             name: s.name,
             detail: s.detail,
@@ -962,12 +1049,14 @@ fn get_sandbox_summary(state: State<MonacoHostState>) -> SandboxSummaryJsonRespo
     let summary = state.sandbox().usage_summary();
     let principals: Vec<SandboxPrincipalJson> = summary
         .into_iter()
-        .map(|(id, (open_buffers, memory_bytes, violations))| SandboxPrincipalJson {
-            id,
-            open_buffers,
-            memory_bytes,
-            violations,
-        })
+        .map(
+            |(id, (open_buffers, memory_bytes, violations))| SandboxPrincipalJson {
+                id,
+                open_buffers,
+                memory_bytes,
+                violations,
+            },
+        )
         .collect();
     SandboxSummaryJsonResponse {
         principals,
@@ -1007,10 +1096,7 @@ struct PermissionsJsonResponse {
 }
 
 #[tauri::command]
-fn get_permissions(
-    state: State<MonacoHostState>,
-    principal_id: String,
-) -> PermissionsJsonResponse {
+fn get_permissions(state: State<MonacoHostState>, principal_id: String) -> PermissionsJsonResponse {
     let perms = state
         .capabilities()
         .permissions_for(&principal_id)
@@ -1098,8 +1184,10 @@ fn completion_document_json(
     request: CompletionJsonRequest,
 ) -> Result<CompletionJsonResponse, String> {
     let registry = state.buffer_registry().read().map_err(|e| e.to_string())?;
+    let mut lsp = state.lsp_registry().write().map_err(|e| e.to_string())?;
     let response = monaco_tauri::syntax_handlers::completion_document(
         &registry,
+        Some(&mut lsp),
         monaco_tauri::proto::code::ipc::editor::language::CompletionRequest {
             resource: Some(file_uri_from_path(&request.path)),
             line: request.line,
@@ -1126,6 +1214,123 @@ fn completion_document_json(
         is_incomplete: response.is_incomplete,
         version_id: response.version_id,
     })
+}
+
+#[tauri::command]
+fn code_actions_document_json(
+    state: State<MonacoHostState>,
+    request: CodeActionJsonRequest,
+) -> Result<CodeActionJsonResponse, String> {
+    let registry = state.buffer_registry().read().map_err(|e| e.to_string())?;
+    let mut lsp = state.lsp_registry().write().map_err(|e| e.to_string())?;
+    let response = monaco_tauri::syntax_handlers::code_actions_document(
+        &registry,
+        Some(&mut lsp),
+        monaco_tauri::proto::code::ipc::editor::language::CodeActionRequest {
+            resource: Some(file_uri_from_path(&request.path)),
+            version_id: 0,
+            start_line: request.start_line,
+            start_column: request.start_column,
+            end_line: request.end_line,
+            end_column: request.end_column,
+            kind_filter: request.kind_filter,
+        },
+    )?;
+    let actions = response
+        .actions
+        .into_iter()
+        .map(|a| CodeActionJson {
+            title: a.title,
+            kind: a.kind,
+            is_preferred: a.is_preferred,
+        })
+        .collect();
+    Ok(CodeActionJsonResponse {
+        version_id: response.version_id,
+        actions,
+    })
+}
+
+#[tauri::command]
+fn wasm_sync_state_json(
+    state: State<MonacoHostState>,
+    request: WasmSyncStateJsonRequest,
+) -> Result<WasmSyncStateJsonResponse, String> {
+    let registry = state.buffer_registry().read().map_err(|e| e.to_string())?;
+
+    match (&request.previous_content, request.previous_version_id) {
+        (Some(previous_content), Some(previous_version_id)) => {
+            let delta = wasm_sync::compute_line_delta(
+                &registry,
+                &request.path,
+                previous_content,
+                previous_version_id,
+            )?;
+
+            if let Some(delta) = delta {
+                return Ok(WasmSyncStateJsonResponse {
+                    mode: "delta".to_string(),
+                    snapshot: None,
+                    delta: Some(WasmSyncDeltaJson {
+                        start_line: delta.start_line,
+                        end_line: delta.end_line,
+                        text: delta.text,
+                        version_id: delta.version_id,
+                    }),
+                });
+            }
+
+            Ok(WasmSyncStateJsonResponse {
+                mode: "noop".to_string(),
+                snapshot: None,
+                delta: None,
+            })
+        }
+        _ => {
+            let snapshot = wasm_sync::build_snapshot(&registry, &request.path)?
+                .ok_or_else(|| format!("Buffer not found: {}", request.path))?;
+
+            Ok(WasmSyncStateJsonResponse {
+                mode: "snapshot".to_string(),
+                snapshot: Some(WasmSyncSnapshotJson {
+                    path: snapshot.resource,
+                    content: snapshot.content,
+                    version_id: snapshot.version_id,
+                    line_count: snapshot.line_count,
+                }),
+                delta: None,
+            })
+        }
+    }
+}
+
+#[tauri::command]
+fn wasm_sync_state_binary(
+    state: State<MonacoHostState>,
+    request: WasmSyncStateJsonRequest,
+) -> Result<Vec<u8>, String> {
+    let registry = state.buffer_registry().read().map_err(|e| e.to_string())?;
+
+    match (&request.previous_content, request.previous_version_id) {
+        (Some(previous_content), Some(previous_version_id)) => {
+            let delta = wasm_sync::compute_line_delta(
+                &registry,
+                &request.path,
+                previous_content,
+                previous_version_id,
+            )?;
+            if let Some(delta) = delta {
+                Ok(delta.to_binary())
+            } else {
+                Ok(wasm_sync::noop_binary())
+            }
+        }
+        _ => {
+            let snapshot = wasm_sync::build_snapshot(&registry, &request.path)?
+                .ok_or_else(|| format!("Buffer not found: {}", request.path))?;
+            Ok(snapshot.to_binary())
+        }
+    }
 }
 
 fn main() {
@@ -1160,6 +1365,9 @@ fn main() {
             diagnostics_document_json,
             document_symbols_document_json,
             completion_document_json,
+            code_actions_document_json,
+            wasm_sync_state_json,
+            wasm_sync_state_binary,
             get_audit_log,
             get_sandbox_summary,
             grant_permission,

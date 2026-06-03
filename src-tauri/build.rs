@@ -13,4 +13,3 @@ fn main() {
         .compile_protos(&protos, &["../proto"])
         .expect("failed to compile Monaco proto definitions");
 }
-

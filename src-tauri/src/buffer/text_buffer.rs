@@ -1,6 +1,6 @@
-use ropey::Rope;
 use crate::buffer::undo::{UndoEntry, UndoStack, UndoTransaction};
 use crate::buffer::{ContentChange, LineIndex, Position};
+use ropey::Rope;
 
 /// Events emitted by the text buffer when content changes.
 #[derive(Debug, Clone)]
@@ -217,7 +217,10 @@ impl TextBuffer {
             self.rope.len_bytes()
         };
 
-        self.rope.get_slice(start..end).map(|s| s.to_string()).unwrap_or_default()
+        self.rope
+            .get_slice(start..end)
+            .map(|s| s.to_string())
+            .unwrap_or_default()
     }
 
     /// Returns the dirty line ranges from the most recent edit (0-indexed).
@@ -244,12 +247,14 @@ impl TextBuffer {
 
     /// Converts a position to a byte offset.
     pub fn position_to_offset(&self, position: Position) -> Option<usize> {
-        self.line_index.position_to_offset(&self.rope.to_string(), position)
+        self.line_index
+            .position_to_offset(&self.rope.to_string(), position)
     }
 
     /// Converts a byte offset to a position.
     pub fn offset_to_position(&self, offset: usize) -> Option<Position> {
-        self.line_index.offset_to_position(&self.rope.to_string(), offset)
+        self.line_index
+            .offset_to_position(&self.rope.to_string(), offset)
     }
 
     /// Applies a single content change and returns the event.
@@ -393,11 +398,8 @@ impl TextBuffer {
         let content = self.rope.to_string();
         self.line_index = LineIndex::new(&content);
 
-        let event = ModelContentChangedEvent::new(
-            self.resource.clone(),
-            self.version_id,
-            applied_changes,
-        );
+        let event =
+            ModelContentChangedEvent::new(self.resource.clone(), self.version_id, applied_changes);
 
         Some(event)
     }
@@ -413,7 +415,9 @@ impl TextBuffer {
         // Create a change representing the full replacement
         let change = ContentChange {
             start_position: Position::new(1, 1),
-            end_position: self.offset_to_position(old_content.len()).unwrap_or(Position::new(1, 1)),
+            end_position: self
+                .offset_to_position(old_content.len())
+                .unwrap_or(Position::new(1, 1)),
             text: new_content.to_string(),
             range_offset: 0,
             range_length: old_content.encode_utf16().count() as u64,
@@ -435,12 +439,9 @@ impl TextBuffer {
         // Rebuild line index
         self.line_index = LineIndex::new(new_content);
 
-        let event = ModelContentChangedEvent::new(
-            self.resource.clone(),
-            self.version_id,
-            vec![change],
-        )
-        .with_flush(true);
+        let event =
+            ModelContentChangedEvent::new(self.resource.clone(), self.version_id, vec![change])
+                .with_flush(true);
 
         Some(event)
     }
@@ -470,12 +471,8 @@ impl TextBuffer {
         self.version_id += 1;
         self.is_dirty = true;
 
-        let event = ModelContentChangedEvent::new(
-            self.resource.clone(),
-            self.version_id,
-            changes,
-        )
-        .with_undoing(true);
+        let event = ModelContentChangedEvent::new(self.resource.clone(), self.version_id, changes)
+            .with_undoing(true);
 
         Some(event)
     }
@@ -499,12 +496,8 @@ impl TextBuffer {
         self.version_id += 1;
         self.is_dirty = true;
 
-        let event = ModelContentChangedEvent::new(
-            self.resource.clone(),
-            self.version_id,
-            changes,
-        )
-        .with_redoing(true);
+        let event = ModelContentChangedEvent::new(self.resource.clone(), self.version_id, changes)
+            .with_redoing(true);
 
         Some(event)
     }
@@ -533,7 +526,10 @@ impl TextBuffer {
                     text_byte_len as u64,
                 ))
             }
-            UndoEntry::Delete { position, deleted_text } => {
+            UndoEntry::Delete {
+                position,
+                deleted_text,
+            } => {
                 // Undo delete = re-insert the deleted text
                 let start_offset = self.position_to_offset(position.start_position)?;
                 self.rope.insert(start_offset, deleted_text);
@@ -551,12 +547,11 @@ impl TextBuffer {
             UndoEntry::Replace { position, old_text } => {
                 // Undo replace = replace current text with old text
                 let start_offset = self.position_to_offset(position.start_position)?;
-                let current_text = self.get_value_in_range(
-                    position.start_position,
-                    position.end_position,
-                )?;
+                let current_text =
+                    self.get_value_in_range(position.start_position, position.end_position)?;
 
-                self.rope.remove(start_offset..start_offset + current_text.len());
+                self.rope
+                    .remove(start_offset..start_offset + current_text.len());
                 self.rope.insert(start_offset, old_text);
 
                 // Rebuild line index
@@ -592,7 +587,10 @@ impl TextBuffer {
                     start_offset as u64,
                 ))
             }
-            UndoEntry::Delete { position, deleted_text: _ } => {
+            UndoEntry::Delete {
+                position,
+                deleted_text: _,
+            } => {
                 // Redo delete = delete the text again
                 let start_offset = self.position_to_offset(position.start_position)?;
                 let end_offset = self.position_to_offset(position.end_position)?;
@@ -704,12 +702,7 @@ mod tests {
     #[test]
     fn text_buffer_delete() {
         let mut buffer = TextBuffer::new("test://file.txt".to_string(), "hello beautiful world");
-        let change = ContentChange::delete(
-            Position::new(1, 6),
-            Position::new(1, 16),
-            6,
-            10,
-        );
+        let change = ContentChange::delete(Position::new(1, 6), Position::new(1, 16), 6, 10);
         let event = buffer.apply_change(&change);
 
         assert!(event.is_some());
@@ -775,7 +768,7 @@ mod tests {
     #[test]
     fn text_buffer_mark_as_saved() {
         let mut buffer = TextBuffer::new("test://file.txt".to_string(), "content");
-        let change = ContentChange::insert(Position::new(1, 8), "!" .to_string(), 7);
+        let change = ContentChange::insert(Position::new(1, 8), "!".to_string(), 7);
         buffer.apply_change(&change);
 
         assert!(buffer.is_dirty());
@@ -812,7 +805,7 @@ mod tests {
     #[test]
     fn text_buffer_snapshot() {
         let mut buffer = TextBuffer::new("test://file.txt".to_string(), "content");
-        let change = ContentChange::insert(Position::new(1, 8), "!" .to_string(), 7);
+        let change = ContentChange::insert(Position::new(1, 8), "!".to_string(), 7);
         buffer.apply_change(&change);
 
         let snapshot = buffer.get_snapshot();
@@ -827,7 +820,10 @@ mod tests {
         assert_eq!(buffer.get_value_in_line_range(0, 2), "line1\nline2\n");
         assert_eq!(buffer.get_value_in_line_range(1, 3), "line2\nline3\n");
         assert_eq!(buffer.get_value_in_line_range(2, 4), "line3\nline4");
-        assert_eq!(buffer.get_value_in_line_range(0, 10), "line1\nline2\nline3\nline4");
+        assert_eq!(
+            buffer.get_value_in_line_range(0, 10),
+            "line1\nline2\nline3\nline4"
+        );
         assert_eq!(buffer.get_value_in_line_range(4, 5), "");
     }
 

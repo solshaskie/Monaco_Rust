@@ -1,12 +1,12 @@
 use prost::Message;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use monaco_tauri::proto::code::ipc::editor;
 use monaco_tauri::proto::code::ipc::editor::host;
 use monaco_tauri::proto::code::ipc::editor::language;
 use monaco_tauri::proto::code::ipc::file;
 
-fn file_uri(path: &PathBuf) -> file::Uri {
+fn file_uri(path: &Path) -> file::Uri {
     file::Uri {
         scheme: "file".to_string(),
         authority: String::new(),
@@ -32,7 +32,10 @@ fn protobuf_open_document_request_roundtrip() {
     let decoded = host::OpenDocumentRequest::decode(encoded.as_slice()).unwrap();
 
     assert_eq!(decoded.create_if_missing, original.create_if_missing);
-    assert_eq!(decoded.preferred_language_id, original.preferred_language_id);
+    assert_eq!(
+        decoded.preferred_language_id,
+        original.preferred_language_id
+    );
     let r = decoded.resource.unwrap();
     assert_eq!(r.path, "/tmp/test.rs");
 }
@@ -179,19 +182,17 @@ fn protobuf_completion_request_roundtrip() {
 #[test]
 fn protobuf_completion_response_roundtrip() {
     let original = language::CompletionResponse {
-        items: vec![
-            language::CompletionItem {
-                label: "println".to_string(),
-                kind: "function".to_string(),
-                detail: " Prints to stdout".to_string(),
-                documentation_utf8: vec![],
-                insert_text: "println!(\"$0\")".to_string(),
-                sort_text: "a".to_string(),
-                filter_text: "println".to_string(),
-                is_snippet: true,
-                additional_text_edits: vec![],
-            },
-        ],
+        items: vec![language::CompletionItem {
+            label: "println".to_string(),
+            kind: "function".to_string(),
+            detail: " Prints to stdout".to_string(),
+            documentation_utf8: vec![],
+            insert_text: "println!(\"$0\")".to_string(),
+            sort_text: "a".to_string(),
+            filter_text: "println".to_string(),
+            is_snippet: true,
+            additional_text_edits: vec![],
+        }],
         is_incomplete: false,
         version_id: 3,
     };

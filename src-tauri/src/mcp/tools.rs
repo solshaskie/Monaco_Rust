@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 
 use crate::buffer::{BufferRegistry, ContentChange, Position};
 use crate::syntax::{extract_document_symbols, SyntaxParser};
@@ -92,7 +92,11 @@ impl std::fmt::Display for McpToolError {
         match self {
             McpToolError::BufferNotFound(r) => write!(f, "Buffer not found: {}", r),
             McpToolError::VersionConflict { expected, actual } => {
-                write!(f, "Version conflict: expected {} but found {}", expected, actual)
+                write!(
+                    f,
+                    "Version conflict: expected {} but found {}",
+                    expected, actual
+                )
             }
             McpToolError::InvalidEdit(msg) => write!(f, "Invalid edit: {}", msg),
             McpToolError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
@@ -160,7 +164,11 @@ impl McpToolRegistry {
     }
 }
 
-fn make_provenance(tool_name: &str, path: Option<&str>, version_id: Option<u64>) -> McpResultProvenance {
+fn make_provenance(
+    tool_name: &str,
+    path: Option<&str>,
+    version_id: Option<u64>,
+) -> McpResultProvenance {
     McpResultProvenance {
         source_kind: "buffer_registry".to_string(),
         path: path.map(|value| value.to_string()),
@@ -210,11 +218,11 @@ fn position_in_symbol(symbol: &crate::syntax::DocumentSymbol, line: u32, column:
     starts_before && ends_after
 }
 
-fn find_symbol_at_position<'a>(
-    symbols: &'a [crate::syntax::DocumentSymbol],
+fn find_symbol_at_position(
+    symbols: &[crate::syntax::DocumentSymbol],
     line: u32,
     column: u32,
-) -> Option<&'a crate::syntax::DocumentSymbol> {
+) -> Option<&crate::syntax::DocumentSymbol> {
     for symbol in symbols {
         if position_in_symbol(symbol, line, column) {
             if let Some(child) = find_symbol_at_position(&symbol.children, line, column) {
@@ -352,10 +360,12 @@ impl McpTool for EditFileTool {
 
         let start_offset = match content.find(&args.old_text) {
             Some(o) => o,
-            None => return McpToolResult::err(format!(
-                "old_text not found in file. Expected: {:?}",
-                args.old_text
-            )),
+            None => {
+                return McpToolResult::err(format!(
+                    "old_text not found in file. Expected: {:?}",
+                    args.old_text
+                ))
+            }
         };
 
         // Build a ContentChange from the old_text → new_text replacement
@@ -380,21 +390,22 @@ impl McpTool for EditFileTool {
         };
 
         match result {
-            Some(event) => McpToolResult::ok("Replaced text successfully", event.version_id).with_truth(
-                McpCertainty::Observed,
-                make_provenance("edit_file", Some(&args.path), Some(event.version_id)),
-                serde_json::json!({
-                    "path": args.path,
-                    "version_id": event.version_id,
-                    "change_count": event.changes.len(),
-                    "expected_version": args.expected_version,
-                    "operation": "replace_exact_text",
-                }),
-                Some(serde_json::json!({
-                    "path": args.path,
-                    "version_id": event.version_id,
-                })),
-            ),
+            Some(event) => McpToolResult::ok("Replaced text successfully", event.version_id)
+                .with_truth(
+                    McpCertainty::Observed,
+                    make_provenance("edit_file", Some(&args.path), Some(event.version_id)),
+                    serde_json::json!({
+                        "path": args.path,
+                        "version_id": event.version_id,
+                        "change_count": event.changes.len(),
+                        "expected_version": args.expected_version,
+                        "operation": "replace_exact_text",
+                    }),
+                    Some(serde_json::json!({
+                        "path": args.path,
+                        "version_id": event.version_id,
+                    })),
+                ),
             None => McpToolResult::err("Edit had no effect"),
         }
     }
@@ -450,38 +461,43 @@ impl McpTool for ListSymbolsTool {
             .enumerate()
             .filter_map(|(i, line)| {
                 let trimmed = line.trim_start();
-                if trimmed.starts_with("fn ") {
-                    let name = trimmed[3..].split(|c: char| c == '(' || c == '<' || c == ' ').next()?;
+                if let Some(rest) = trimmed.strip_prefix("fn ") {
+                    let name = rest.split(['(', '<', ' ']).next()?;
                     Some(format!("fn {} (line {})", name, i + 1))
-                } else if trimmed.starts_with("struct ") {
-                    let name = trimmed[7..].split(|c: char| c == '<' || c == ' ').next()?;
+                } else if let Some(rest) = trimmed.strip_prefix("struct ") {
+                    let name = rest.split(['<', ' ']).next()?;
                     Some(format!("struct {} (line {})", name, i + 1))
-                } else if trimmed.starts_with("enum ") {
-                    let name = trimmed[5..].split(|c: char| c == '<' || c == ' ').next()?;
+                } else if let Some(rest) = trimmed.strip_prefix("enum ") {
+                    let name = rest.split(['<', ' ']).next()?;
                     Some(format!("enum {} (line {})", name, i + 1))
-                } else if trimmed.starts_with("trait ") {
-                    let name = trimmed[6..].split(|c: char| c == '<' || c == ' ').next()?;
+                } else if let Some(rest) = trimmed.strip_prefix("trait ") {
+                    let name = rest.split(['<', ' ']).next()?;
                     Some(format!("trait {} (line {})", name, i + 1))
-                } else if trimmed.starts_with("impl ") {
-                    let rest = &trimmed[5..];
+                } else if let Some(rest) = trimmed.strip_prefix("impl ") {
                     if let Some(for_pos) = rest.find(" for ") {
                         let trait_name = rest[..for_pos].trim();
-                        let type_name = rest[for_pos + 5..].split(|c: char| c == ' ').next()?;
-                        Some(format!("impl {} for {} (line {})", trait_name, type_name, i + 1))
+                        let type_name = rest[for_pos + 5..].split(' ').next()?;
+                        Some(format!(
+                            "impl {} for {} (line {})",
+                            trait_name,
+                            type_name,
+                            i + 1
+                        ))
                     } else {
-                        let type_name = rest.split(|c: char| c == ' ').next()?;
+                        let type_name = rest.split(' ').next()?;
                         Some(format!("impl {} (line {})", type_name, i + 1))
                     }
-                } else if trimmed.starts_with("mod ") {
-                    let name = trimmed[4..].split(|c: char| c == ' ').next()?;
+                } else if let Some(rest) = trimmed.strip_prefix("mod ") {
+                    let name = rest.split(' ').next()?;
                     Some(format!("mod {} (line {})", name, i + 1))
-                } else if trimmed.starts_with("const ") || trimmed.starts_with("static ") {
-                    let prefix = if trimmed.starts_with("const ") { "const" } else { "static" };
-                    let offset = if prefix == "const" { 6 } else { 7 };
-                    let name = trimmed[offset..].split(|c: char| c == ':' || c == ' ').next()?;
-                    Some(format!("{} {} (line {})", prefix, name, i + 1))
-                } else if trimmed.starts_with("type ") {
-                    let name = trimmed[5..].split(|c: char| c == '=' || c == ' ').next()?;
+                } else if let Some(rest) = trimmed.strip_prefix("const ") {
+                    let name = rest.split([':', ' ']).next()?;
+                    Some(format!("const {} (line {})", name, i + 1))
+                } else if let Some(rest) = trimmed.strip_prefix("static ") {
+                    let name = rest.split([':', ' ']).next()?;
+                    Some(format!("static {} (line {})", name, i + 1))
+                } else if let Some(rest) = trimmed.strip_prefix("type ") {
+                    let name = rest.split(['=', ' ']).next()?;
                     Some(format!("type {} (line {})", name, i + 1))
                 } else {
                     None
@@ -620,7 +636,8 @@ impl McpTool for ApplyEditsTool {
         McpToolResult::ok(
             format!("Applied {} edits successfully", applied),
             last_version,
-        ).with_truth(
+        )
+        .with_truth(
             McpCertainty::Observed,
             make_provenance("apply_edits", Some(&args.path), Some(last_version)),
             serde_json::json!({
@@ -692,7 +709,10 @@ impl McpTool for GetBufferMetadataTool {
         let dirty = registry.is_buffer_dirty(&args.path).unwrap_or(false);
         let can_undo = registry.can_undo(&args.path).unwrap_or(false);
         let can_redo = registry.can_redo(&args.path).unwrap_or(false);
-        let is_open = registry.open_resources().iter().any(|resource| resource == &args.path);
+        let is_open = registry
+            .open_resources()
+            .iter()
+            .any(|resource| resource == &args.path);
         let line_count = content.lines().count();
 
         let data = serde_json::json!({
@@ -761,7 +781,9 @@ impl McpTool for GetBufferSnapshotProofTool {
 
         let content = match String::from_utf8(snapshot.content_utf8.clone()) {
             Ok(value) => value,
-            Err(e) => return McpToolResult::err(format!("Buffer content is not valid UTF-8: {}", e)),
+            Err(e) => {
+                return McpToolResult::err(format!("Buffer content is not valid UTF-8: {}", e))
+            }
         };
 
         let include_content = args.include_content.unwrap_or(true);
@@ -1029,7 +1051,11 @@ impl McpTool for GetBufferVersionLineageTool {
 
         McpToolResult::ok("Retrieved current buffer lineage posture", version_id).with_truth(
             McpCertainty::Observed,
-            make_provenance("get_buffer_version_lineage", Some(&args.path), Some(version_id)),
+            make_provenance(
+                "get_buffer_version_lineage",
+                Some(&args.path),
+                Some(version_id),
+            ),
             data.clone(),
             Some(data),
         )
@@ -1145,7 +1171,10 @@ mod tests {
             r#"{"path":"test://a.rs","old_text":"world","new_text":"universe"}"#,
         );
         assert!(result.success);
-        assert_eq!(registry.get_buffer_content("test://a.rs"), Some("hello universe".to_string()));
+        assert_eq!(
+            registry.get_buffer_content("test://a.rs"),
+            Some("hello universe".to_string())
+        );
     }
 
     #[test]
@@ -1175,7 +1204,7 @@ mod tests {
     fn mcp_list_symbols_tool_extracts_rust_symbols() {
         let registry = make_registry_with_file(
             "test://a.rs",
-            "fn main() {}\nstruct Point { x: i32 }\nenum Color { Red }\n"
+            "fn main() {}\nstruct Point { x: i32 }\nenum Color { Red }\n",
         );
         let result = list_symbols_tool(&registry, r#"{"path":"test://a.rs"}"#);
         assert!(result.success);
@@ -1192,7 +1221,10 @@ mod tests {
             r#"{"path":"test://a.rs","edits":[{"start_line":1,"start_column":1,"end_line":1,"end_column":4,"text":"xxx"},{"start_line":1,"start_column":9,"end_line":1,"end_column":12,"text":"yyy"}]}"#,
         );
         assert!(result.success);
-        assert_eq!(registry.get_buffer_content("test://a.rs"), Some("xxx bbb yyy".to_string()));
+        assert_eq!(
+            registry.get_buffer_content("test://a.rs"),
+            Some("xxx bbb yyy".to_string())
+        );
     }
 
     #[test]
@@ -1219,17 +1251,48 @@ mod tests {
         let evidence = result.evidence.expect("expected snapshot evidence");
         assert_eq!(evidence["path"], "test://a.rs");
         assert_eq!(evidence["version_id"], 1);
-        assert_eq!(evidence["content_sha256"], "4a1e67f2fe1d1cc7b31d0ca2ec441da4778203a036a77da10344c85e24ff0f92");
+        assert_eq!(
+            evidence["content_sha256"],
+            "4a1e67f2fe1d1cc7b31d0ca2ec441da4778203a036a77da10344c85e24ff0f92"
+        );
         let data = result.data.expect("expected snapshot content");
         assert_eq!(data["content"], "hello\nworld\n");
     }
 
     #[test]
-    fn mcp_get_symbol_index_tool_returns_structured_symbols() {
-        let registry = make_registry_with_file(
-            "test://a.rs",
-            "struct Point { x: i32 }\nfn main() {}\n",
+    fn mcp_get_buffer_snapshot_proof_tool_can_omit_content() {
+        let registry = make_registry_with_file("test://a.rs", "hello\nworld\n");
+        let result = get_buffer_snapshot_proof_tool(
+            &registry,
+            r#"{"path":"test://a.rs","include_content":false}"#,
         );
+        assert!(result.success);
+        let evidence = result.evidence.expect("expected snapshot evidence");
+        assert_eq!(evidence["include_content"], false);
+        assert!(result.data.is_none());
+    }
+
+    #[test]
+    fn mcp_get_buffer_metadata_tool_reports_dirty_and_undo_state() {
+        let registry = make_registry_with_file("test://a.rs", "hello world");
+        let edit = edit_file_tool(
+            &registry,
+            r#"{"path":"test://a.rs","old_text":"world","new_text":"rust"}"#,
+        );
+        assert!(edit.success);
+
+        let result = get_buffer_metadata_tool(&registry, r#"{"path":"test://a.rs"}"#);
+        assert!(result.success);
+        let data = result.data.expect("expected metadata data");
+        assert_eq!(data["is_dirty"], true);
+        assert_eq!(data["can_undo"], true);
+        assert_eq!(data["can_redo"], false);
+    }
+
+    #[test]
+    fn mcp_get_symbol_index_tool_returns_structured_symbols() {
+        let registry =
+            make_registry_with_file("test://a.rs", "struct Point { x: i32 }\nfn main() {}\n");
         let result = get_symbol_index_tool(&registry, r#"{"path":"test://a.rs"}"#);
         assert!(result.success);
         assert_eq!(result.certainty, Some(McpCertainty::Observed));
@@ -1243,11 +1306,25 @@ mod tests {
     }
 
     #[test]
-    fn mcp_get_symbol_at_position_tool_returns_deepest_symbol() {
+    fn mcp_get_symbol_index_tool_uses_typescript_parser_for_ts_paths() {
         let registry = make_registry_with_file(
-            "test://a.rs",
-            "struct Point { x: i32 }\nfn main() {}\n",
+            "test://a.ts",
+            "interface Point { x: number; }\nfunction main() { return 1; }\n",
         );
+        let result = get_symbol_index_tool(&registry, r#"{"path":"test://a.ts"}"#);
+        assert!(result.success);
+        let evidence = result.evidence.expect("expected symbol evidence");
+        assert_eq!(evidence["parser_has_errors"], false);
+        let data = result.data.expect("expected symbol data");
+        let symbols = data["symbols"].as_array().expect("symbols array");
+        assert!(symbols.iter().any(|s| s["name"] == "Point"));
+        assert!(symbols.iter().any(|s| s["name"] == "main"));
+    }
+
+    #[test]
+    fn mcp_get_symbol_at_position_tool_returns_deepest_symbol() {
+        let registry =
+            make_registry_with_file("test://a.rs", "struct Point { x: i32 }\nfn main() {}\n");
         let result = get_symbol_at_position_tool(
             &registry,
             r#"{"path":"test://a.rs","line":1,"column":16}"#,
@@ -1260,6 +1337,18 @@ mod tests {
     }
 
     #[test]
+    fn mcp_get_symbol_at_position_tool_reports_missing_symbol() {
+        let registry = make_registry_with_file("test://a.rs", "fn main() {}\n");
+        let result =
+            get_symbol_at_position_tool(&registry, r#"{"path":"test://a.rs","line":3,"column":1}"#);
+        assert!(!result.success);
+        assert!(result
+            .error
+            .expect("missing symbol error")
+            .contains("No symbol found"));
+    }
+
+    #[test]
     fn mcp_get_buffer_version_lineage_tool_reports_current_boundary() {
         let registry = make_registry_with_file("test://a.rs", "fn main() {}\n");
         let result = get_buffer_version_lineage_tool(&registry, r#"{"path":"test://a.rs"}"#);
@@ -1268,8 +1357,14 @@ mod tests {
         let data = result.data.expect("expected lineage data");
         assert_eq!(data["current_version_id"], 1);
         assert_eq!(data["lineage_model"], "monotonic_version_counter");
-        assert_eq!(data["lineage_capabilities"]["historical_versions_stored"], false);
-        assert_eq!(data["lineage_capabilities"]["snapshot_proof_available_for_current_version"], true);
+        assert_eq!(
+            data["lineage_capabilities"]["historical_versions_stored"],
+            false
+        );
+        assert_eq!(
+            data["lineage_capabilities"]["snapshot_proof_available_for_current_version"],
+            true
+        );
     }
 
     #[test]
@@ -1290,7 +1385,10 @@ mod tests {
     #[test]
     fn mcp_edit_file_tool_not_found() {
         let registry = BufferRegistry::new();
-        let result = edit_file_tool(&registry, r#"{"path":"test://missing.rs","old_text":"x","new_text":"y"}"#);
+        let result = edit_file_tool(
+            &registry,
+            r#"{"path":"test://missing.rs","old_text":"x","new_text":"y"}"#,
+        );
         assert!(!result.success);
         assert!(result.error.unwrap().contains("not found"));
     }

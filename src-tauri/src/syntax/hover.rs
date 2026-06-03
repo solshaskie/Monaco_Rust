@@ -12,7 +12,10 @@ pub struct HoverInfo {
 
 /// Finds the node at the given 1-indexed line/column and produces hover info.
 pub fn hover_at_position(tree: &Tree, source: &str, line: u32, column: u32) -> Option<HoverInfo> {
-    let point = Point::new((line.saturating_sub(1)) as usize, (column.saturating_sub(1)) as usize);
+    let point = Point::new(
+        (line.saturating_sub(1)) as usize,
+        (column.saturating_sub(1)) as usize,
+    );
     let root = tree.root_node();
     let node = find_node_at_point(&root, point)?;
 

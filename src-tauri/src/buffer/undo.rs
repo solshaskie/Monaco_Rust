@@ -4,9 +4,7 @@ use crate::buffer::ContentChange;
 #[derive(Debug, Clone)]
 pub enum UndoEntry {
     /// An insert operation (stores the text that was inserted and its position).
-    Insert {
-        position: ContentChange,
-    },
+    Insert { position: ContentChange },
     /// A delete operation (stores the text that was deleted and its position).
     Delete {
         position: ContentChange,

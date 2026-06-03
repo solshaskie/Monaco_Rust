@@ -32,6 +32,15 @@ jobs:
       - name: Test
         run: cd src-tauri && cargo test --all-targets --verbose
 
+      - name: Run benchmarks
+        run: cd src-tauri && cargo test --test m7_buffer_bench -- --nocapture > ../benchmark-results.txt
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ github.run_id }}
+          path: benchmark-results.txt
+
   test-wasm:
     name: WASM Module Tests
     runs-on: ubuntu-latest
@@ -81,13 +90,9 @@ jobs:
       - name: Clippy
         run: cd src-tauri && cargo clippy -- -D warnings
 
-  build-tauri:
-    name: Build Tauri App
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.platform }}
+  build-tauri-linux-x86_64:
+    name: Build Tauri App (Linux x86_64)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -106,8 +111,7 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - name: Install dependencies (Ubuntu)
-        if: matrix.platform == 'ubuntu-latest'
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
@@ -121,5 +125,175 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tauri-${{ matrix.platform }}
+          name: tauri-linux-x86_64
           path: src-tauri/target/release/monaco-tauri*
+
+  build-tauri-linux-aarch64:
+    name: Build Tauri App (Linux aarch64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install cross-compilation linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
+      - name: Build Tauri (cross-compile aarch64)
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cd src-tauri && cargo build --release --target aarch64-unknown-linux-gnu
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-linux-aarch64
+          path: src-tauri/target/aarch64-unknown-linux-gnu/release/monaco-tauri*
+
+  build-tauri-macos-x86_64:
+    name: Build Tauri App (macOS x86_64)
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+          targets: x86_64-apple-darwin
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
+      - name: Build Tauri
+        run: cd src-tauri && cargo build --release --target x86_64-apple-darwin
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-macos-x86_64
+          path: src-tauri/target/x86_64-apple-darwin/release/monaco-tauri*
+
+  build-tauri-macos-aarch64:
+    name: Build Tauri App (macOS aarch64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
+      - name: Build Tauri
+        run: cd src-tauri && cargo build --release --target aarch64-apple-darwin
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-macos-aarch64
+          path: src-tauri/target/aarch64-apple-darwin/release/monaco-tauri*
+
+  build-tauri-windows-x86_64:
+    name: Build Tauri App (Windows x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
+      - name: Build Tauri
+        shell: pwsh
+        run: cd src-tauri; cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-windows-x86_64
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/monaco-tauri*
+
+  visual-regression:
+    name: Visual Regression Tests
+    runs-on: ubuntu-latest
+    needs: build-tauri-linux-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright Browsers
+        run: npx playwright install chromium
+
+      - name: Install tauri-driver
+        uses: taiki-e/cache-cargo-install-action@v2
+        with:
+          tool: tauri-driver
+
+      - name: Build Tauri App
+        run: cd src-tauri && cargo build --release
+
+      - name: Run Visual Regression Tests
+        run: xvfb-run npx playwright test tests/visual/
+        env:
+          CI: true

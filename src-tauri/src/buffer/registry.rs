@@ -1,6 +1,6 @@
+use crate::buffer::{ContentChange, ModelContentChangedEvent, TextBuffer};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use crate::buffer::{ContentChange, ModelContentChangedEvent, TextBuffer};
 
 /// A registry that manages multiple text buffers by their resource URI.
 ///
@@ -97,7 +97,8 @@ impl BufferRegistry {
         change: &ContentChange,
         expected_version: u64,
     ) -> Result<Option<ModelContentChangedEvent>, String> {
-        let buffer = self.buffers
+        let buffer = self
+            .buffers
             .get(resource)
             .ok_or_else(|| format!("No buffer found for resource: {}", resource))?;
         let buffer = buffer.read().map_err(|e| e.to_string())?;
@@ -217,10 +218,7 @@ impl BufferRegistry {
     }
 
     /// Gets a snapshot of a buffer.
-    pub fn get_buffer_snapshot(
-        &self,
-        resource: &str,
-    ) -> Option<crate::buffer::TextBufferSnapshot> {
+    pub fn get_buffer_snapshot(&self, resource: &str) -> Option<crate::buffer::TextBufferSnapshot> {
         let buffer = self.buffers.get(resource)?;
         let buffer = buffer.read().ok()?;
         Some(buffer.get_snapshot())
@@ -444,8 +442,14 @@ mod tests {
         let change = ContentChange::insert(Position::new(1, 6), "!".to_string(), 5);
         registry.apply_edit("test://file.txt", &change);
 
-        assert!(registry.get_buffer_dirty_lines("test://file.txt").unwrap().len() > 0);
+        assert!(!registry
+            .get_buffer_dirty_lines("test://file.txt")
+            .unwrap()
+            .is_empty());
         registry.clear_buffer_dirty_lines("test://file.txt");
-        assert!(registry.get_buffer_dirty_lines("test://file.txt").unwrap().is_empty());
+        assert!(registry
+            .get_buffer_dirty_lines("test://file.txt")
+            .unwrap()
+            .is_empty());
     }
 }

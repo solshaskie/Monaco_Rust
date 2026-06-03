@@ -23,12 +23,12 @@ pub struct SandboxLimits {
 impl Default for SandboxLimits {
     fn default() -> Self {
         Self {
-            max_buffer_size_bytes: 50 * 1024 * 1024,       // 50 MB
+            max_buffer_size_bytes: 50 * 1024 * 1024, // 50 MB
             max_open_buffers: 100,
-            max_total_memory_bytes: 200 * 1024 * 1024,     // 200 MB
+            max_total_memory_bytes: 200 * 1024 * 1024, // 200 MB
             max_decorations_per_buffer: 10_000,
             max_operation_duration_ms: 5000,
-            max_file_size_bytes: 100 * 1024 * 1024,        // 100 MB
+            max_file_size_bytes: 100 * 1024 * 1024, // 100 MB
             max_undo_stack_size: 10_000,
         }
     }
@@ -38,12 +38,12 @@ impl SandboxLimits {
     /// Creates strict limits for untrusted extensions.
     pub fn strict() -> Self {
         Self {
-            max_buffer_size_bytes: 5 * 1024 * 1024,        // 5 MB
+            max_buffer_size_bytes: 5 * 1024 * 1024, // 5 MB
             max_open_buffers: 10,
-            max_total_memory_bytes: 20 * 1024 * 1024,      // 20 MB
+            max_total_memory_bytes: 20 * 1024 * 1024, // 20 MB
             max_decorations_per_buffer: 1_000,
             max_operation_duration_ms: 1000,
-            max_file_size_bytes: 10 * 1024 * 1024,         // 10 MB
+            max_file_size_bytes: 10 * 1024 * 1024, // 10 MB
             max_undo_stack_size: 1_000,
         }
     }
@@ -51,12 +51,12 @@ impl SandboxLimits {
     /// Creates permissive limits for trusted built-ins.
     pub fn permissive() -> Self {
         Self {
-            max_buffer_size_bytes: 200 * 1024 * 1024,      // 200 MB
+            max_buffer_size_bytes: 200 * 1024 * 1024, // 200 MB
             max_open_buffers: 500,
-            max_total_memory_bytes: 1024 * 1024 * 1024,    // 1 GB
+            max_total_memory_bytes: 1024 * 1024 * 1024, // 1 GB
             max_decorations_per_buffer: 100_000,
             max_operation_duration_ms: 30_000,
-            max_file_size_bytes: 500 * 1024 * 1024,        // 500 MB
+            max_file_size_bytes: 500 * 1024 * 1024, // 500 MB
             max_undo_stack_size: 50_000,
         }
     }
@@ -184,9 +184,14 @@ impl SecuritySandbox {
     }
 
     /// Gets or creates the quota tracker for a principal.
-    fn quota_for(&self, principal: &str) -> std::sync::MutexGuard<'_, HashMap<String, ResourceQuota>> {
+    fn quota_for(
+        &self,
+        principal: &str,
+    ) -> std::sync::MutexGuard<'_, HashMap<String, ResourceQuota>> {
         let mut quotas = self.quotas.lock().unwrap();
-        quotas.entry(principal.to_string()).or_insert_with(|| ResourceQuota::new(self.limits));
+        quotas
+            .entry(principal.to_string())
+            .or_insert_with(|| ResourceQuota::new(self.limits));
         quotas
     }
 
@@ -232,7 +237,11 @@ impl SecuritySandbox {
             .map(|(k, q)| {
                 (
                     k.clone(),
-                    (q.open_buffer_count(), q.total_memory_bytes(), q.violation_count()),
+                    (
+                        q.open_buffer_count(),
+                        q.total_memory_bytes(),
+                        q.violation_count(),
+                    ),
                 )
             })
             .collect()

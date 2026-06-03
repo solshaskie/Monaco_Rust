@@ -7,6 +7,18 @@
 use crate::buffer::BufferRegistry;
 use serde::{Deserialize, Serialize};
 
+fn split_lines_preserve_trailing(content: &str) -> Vec<&str> {
+    if content.is_empty() {
+        vec![""]
+    } else {
+        content.split('\n').collect()
+    }
+}
+
+fn count_lines_preserve_trailing(content: &str) -> usize {
+    split_lines_preserve_trailing(content).len()
+}
+
 /// A delta update representing a range of changed lines.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LineDelta {
@@ -30,6 +42,42 @@ pub struct BufferSnapshot {
     pub line_count: usize,
 }
 
+impl LineDelta {
+    /// Serialize to a compact binary format (mode=1).
+    /// Layout: [mode:1][version_id:8LE][start_line:4LE][end_line:4LE][text_len:4LE][text:utf8]
+    pub fn to_binary(&self) -> Vec<u8> {
+        let text_bytes = self.text.as_bytes();
+        let mut buf = Vec::with_capacity(21 + text_bytes.len());
+        buf.push(1); // mode = delta
+        buf.extend_from_slice(&self.version_id.to_le_bytes());
+        buf.extend_from_slice(&(self.start_line as u32).to_le_bytes());
+        buf.extend_from_slice(&(self.end_line as u32).to_le_bytes());
+        buf.extend_from_slice(&(text_bytes.len() as u32).to_le_bytes());
+        buf.extend_from_slice(text_bytes);
+        buf
+    }
+}
+
+impl BufferSnapshot {
+    /// Serialize to a compact binary format (mode=2).
+    /// Layout: [mode:1][version_id:8LE][line_count:4LE][text_len:4LE][text:utf8]
+    pub fn to_binary(&self) -> Vec<u8> {
+        let text_bytes = self.content.as_bytes();
+        let mut buf = Vec::with_capacity(17 + text_bytes.len());
+        buf.push(2); // mode = snapshot
+        buf.extend_from_slice(&self.version_id.to_le_bytes());
+        buf.extend_from_slice(&(self.line_count as u32).to_le_bytes());
+        buf.extend_from_slice(&(text_bytes.len() as u32).to_le_bytes());
+        buf.extend_from_slice(text_bytes);
+        buf
+    }
+}
+
+/// A compact binary "noop" response (mode=0).
+pub fn noop_binary() -> Vec<u8> {
+    vec![0]
+}
+
 /// Compute a line delta between an old snapshot and the current buffer state.
 /// Returns `None` if the buffer is not found.
 pub fn compute_line_delta(
@@ -42,16 +90,14 @@ pub fn compute_line_delta(
         .get_buffer_content(resource)
         .ok_or_else(|| format!("Buffer not found: {}", resource))?;
 
-    let current_version = registry
-        .get_buffer_version(resource)
-        .unwrap_or(0);
+    let current_version = registry.get_buffer_version(resource).unwrap_or(0);
 
     if current == old_content && current_version == old_version {
         return Ok(None); // No change
     }
 
-    let old_lines: Vec<&str> = old_content.lines().collect();
-    let new_lines: Vec<&str> = current.lines().collect();
+    let old_lines = split_lines_preserve_trailing(old_content);
+    let new_lines = split_lines_preserve_trailing(&current);
 
     // Find the first changed line
     let mut first_changed = 0usize;
@@ -91,15 +137,13 @@ pub fn build_snapshot(
     let content = registry
         .get_buffer_content(resource)
         .ok_or_else(|| format!("Buffer not found: {}", resource))?;
-    let version_id = registry
-        .get_buffer_version(resource)
-        .unwrap_or(0);
+    let version_id = registry.get_buffer_version(resource).unwrap_or(0);
 
     Ok(Some(BufferSnapshot {
         resource: resource.to_string(),
         content: content.clone(),
         version_id,
-        line_count: content.lines().count(),
+        line_count: count_lines_preserve_trailing(&content),
     }))
 }
 
@@ -160,5 +204,63 @@ mod tests {
         assert_eq!(snap.content, "a\nb\nc");
         assert_eq!(snap.line_count, 3);
         assert_eq!(snap.version_id, 1);
+    }
+
+    #[test]
+    fn snapshot_preserves_empty_buffer_line_count() {
+        let reg = make_registry_with("");
+        let snap = build_snapshot(&reg, "test://file.rs").unwrap().unwrap();
+        assert_eq!(snap.content, "");
+        assert_eq!(snap.line_count, 1);
+    }
+
+    #[test]
+    fn delta_preserves_trailing_newline_insert() {
+        let reg = make_registry_with("alpha\nbeta\n");
+        let delta = compute_line_delta(&reg, "test://file.rs", "alpha\nbeta", 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(delta.start_line, 2);
+        assert_eq!(delta.end_line, 2);
+        assert_eq!(delta.text, "");
+    }
+
+    #[test]
+    fn delta_binary_roundtrip() {
+        let delta = LineDelta {
+            start_line: 2,
+            end_line: 5,
+            text: "hello\nworld".to_string(),
+            version_id: 42,
+        };
+        let binary = delta.to_binary();
+        assert_eq!(binary[0], 1); // mode = delta
+        assert_eq!(&binary[1..9], &42u64.to_le_bytes());
+        assert_eq!(&binary[9..13], &2u32.to_le_bytes());
+        assert_eq!(&binary[13..17], &5u32.to_le_bytes());
+        assert_eq!(&binary[17..21], &(11u32).to_le_bytes()); // text len
+        assert_eq!(&binary[21..], b"hello\nworld");
+    }
+
+    #[test]
+    fn snapshot_binary_roundtrip() {
+        let snap = BufferSnapshot {
+            resource: "test://file.rs".to_string(),
+            content: "a\nb".to_string(),
+            version_id: 7,
+            line_count: 2,
+        };
+        let binary = snap.to_binary();
+        assert_eq!(binary[0], 2); // mode = snapshot
+        assert_eq!(&binary[1..9], &7u64.to_le_bytes());
+        assert_eq!(&binary[9..13], &2u32.to_le_bytes());
+        assert_eq!(&binary[13..17], &3u32.to_le_bytes()); // "a\nb" = 3 bytes
+        assert_eq!(&binary[17..], b"a\nb");
+    }
+
+    #[test]
+    fn noop_binary_is_single_zero() {
+        let buf = noop_binary();
+        assert_eq!(buf, vec![0]);
     }
 }

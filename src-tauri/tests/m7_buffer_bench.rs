@@ -6,7 +6,8 @@ use monaco_tauri::buffer::{BufferRegistry, ContentChange, Position, TextBuffer};
 #[test]
 fn bench_small_file_insert() {
     let mut buffer = TextBuffer::new("bench://small.rs".to_string(), "fn main() {}\n");
-    let change = ContentChange::insert(Position::new(1, 12), " println!(\"hello\")".to_string(), 11);
+    let change =
+        ContentChange::insert(Position::new(1, 12), " println!(\"hello\")".to_string(), 11);
 
     let start = Instant::now();
     for _ in 0..1000 {
@@ -95,7 +96,12 @@ fn bench_registry_open_close() {
 #[test]
 fn bench_content_range_large_file() {
     let content: String = (0..10_000)
-        .map(|i| format!("// Line {} with some padding to make it realistic in size\n", i))
+        .map(|i| {
+            format!(
+                "// Line {} with some padding to make it realistic in size\n",
+                i
+            )
+        })
         .collect();
     let buffer = TextBuffer::new("bench://huge.rs".to_string(), &content);
 
@@ -147,7 +153,9 @@ fn bench_tokenize_large_rust_file() {
         .map(|i| {
             format!(
                 "fn function_{}() -> u32 {{ let x = {}; return x + {}; }}\n",
-                i, i, i * 2
+                i,
+                i,
+                i * 2
             )
         })
         .collect();

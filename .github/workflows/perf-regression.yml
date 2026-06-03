@@ -1,0 +1,60 @@
+name: Performance Regression
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  perf-regression:
+    name: Benchmark & Compare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
+      - name: Run benchmarks
+        run: cd src-tauri && cargo test --test m7_buffer_bench -- --nocapture > ../benchmark-results.txt
+
+      - name: Download baseline
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-baseline
+          path: baseline/
+        continue-on-error: true
+
+      - name: Compare against baseline
+        run: |
+          echo "Current benchmark results:"
+          cat benchmark-results.txt
+          if [ -f baseline/benchmark-results.txt ]; then
+            echo ""
+            echo "Baseline results:"
+            cat baseline/benchmark-results.txt
+            echo ""
+            echo "Comparison:"
+            python3 .github/scripts/compare_benchmarks.py benchmark-results.txt baseline/benchmark-results.txt
+          else
+            echo "No baseline found; storing as new baseline."
+          fi
+
+      - name: Upload results as new baseline
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-baseline
+          path: benchmark-results.txt
+          overwrite: true
