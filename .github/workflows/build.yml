@@ -327,8 +327,12 @@ jobs:
 
   visual-regression:
     name: Visual Regression Tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     needs: build-tauri-linux-x86_64
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -366,7 +370,39 @@ jobs:
       - name: Build Tauri App
         run: cd src-tauri && cargo build --release
 
+      - name: Download baseline screenshots
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: visual-baselines-${{ matrix.os }}
+          path: tests/visual/snapshots/
+        continue-on-error: true
+
       - name: Run Visual Regression Tests
         run: xvfb-run npx playwright test tests/visual/
         env:
           CI: true
+
+      - name: Compare screenshots (pixel diff)
+        if: failure()
+        run: |
+          python3 .github/scripts/compare_screenshots.py \
+            tests/visual/snapshots/ \
+            tests/visual/test-results/ \
+            --threshold 0.01
+
+      - name: Upload visual report
+        if: failure()
+        uses: actions/upload-artifact@7447f04c51f2ba27ca35e7f1e28fab848c5b3ba7 # v4
+        with:
+          name: visual-report-${{ matrix.os }}
+          path: |
+            tests/visual/playwright-report/
+            tests/visual/test-results/
+
+      - name: Upload baselines on main
+        if: github.ref == 'refs/heads/main' && success()
+        uses: actions/upload-artifact@7447f04c51f2ba27ca35e7f1e28fab848c5b3ba7 # v4
+        with:
+          name: visual-baselines-${{ matrix.os }}
+          path: tests/visual/snapshots/
+          overwrite: true

@@ -74,9 +74,12 @@ Examples of what can be invited in:
 - Relatent-style semantic indexing
 - stable symbol identity
 - drift analysis
-- structural review
-- contradiction detection
 - proof and uncertainty overlays
+
+What it already provides directly:
+
+- structural editing (`preview_structural_edit`, `structural_edit`) via tree-sitter AST-guided text replacement
+- contradiction detection (`inspect_contradictions`) comparing buffer, disk, and diagnostic truth surfaces
 
 Its role in that relationship is not to become those systems.
 Its role is to give them a sovereign local surface in which to appear, interact, and be governed.
@@ -104,18 +107,30 @@ Current agent-facing capabilities include:
 - `get_buffer_byte_range`
 - `search_text_in_buffers`
 - `query_symbols`
+- `subscribe_buffer_events`
+- `poll_buffer_events`
+- `close_buffers_batch`
+- `watch_workspace`
+- `preview_structural_edit`
+- `structural_edit`
+- `inspect_contradictions`
 
 These are meaningful because they operate against the same authoritative runtime state as the UI, not a parallel shadow layer.
 
 ### 6. Evented Multi-View State
 
-Monaco_Rust brings shared buffer state with event broadcasting.
+Monaco_Rust brings shared buffer state with event broadcasting and in-memory event subscriptions.
+
+The `BufferRegistry` maintains bounded per-buffer event queues (`subscribe_buffer_events` / `poll_buffer_events`) so agents and external processes can observe open, edit, save, and close lifecycle events without polling the full state.
+
+Workspace-level filesystem watching (`watch_workspace`) is also available via the `notify` crate, enabling external change detection for files outside the active buffer set.
 
 That makes it suitable for futures where:
 
 - multiple views observe the same file
 - external semantic/runtime processes report changes back into the surface
 - agent actions need visible synchronization instead of hidden mutation
+- external watchers need to react to filesystem changes without re-scanning
 
 ### 7. Emancipated Local Build Posture
 

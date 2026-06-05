@@ -2,7 +2,7 @@ use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::tokenize::{tokenize_source, WasmToken};
+use crate::tree_sitter_tokenizer::{tokenize_source, WasmToken};
 
 /// 32 MiB maximum cache size.
 const MAX_CACHE_BYTES: usize = 32 * 1024 * 1024;

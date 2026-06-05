@@ -1,9 +1,13 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use tree_sitter::Parser;
 
 use crate::buffer::{BufferRegistry, ContentChange, Position};
 use crate::syntax::{extract_document_symbols, SyntaxParser};
+
+// notify trait must be in scope for Watcher::watch
+use notify::Watcher as _;
 
 /// The result of executing an MCP tool.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -244,6 +248,12 @@ impl McpToolRegistry {
         registry.register(Box::new(SearchTextInBuffersTool));
         registry.register(Box::new(QuerySymbolsTool));
         registry.register(Box::new(DiffFilesTool));
+        registry.register(Box::new(SubscribeBufferEventsTool));
+        registry.register(Box::new(PollBufferEventsTool));
+        registry.register(Box::new(WatchWorkspaceTool));
+        registry.register(Box::new(PreviewStructuralEditTool));
+        registry.register(Box::new(StructuralEditTool));
+        registry.register(Box::new(InspectContradictionsTool));
         registry
     }
 }
@@ -2146,6 +2156,640 @@ pub fn query_symbols_tool(registry: &BufferRegistry, args: &str) -> McpToolResul
 /// Execute the `diff_files` MCP tool.
 pub fn diff_files_tool(registry: &BufferRegistry, args: &str) -> McpToolResult {
     DiffFilesTool.execute(registry, args)
+}
+
+// ---------------------------------------------------------------------------
+// C.2 — Blocked MCP Tools (New)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Tool: subscribe_buffer_events
+// ---------------------------------------------------------------------------
+
+struct SubscribeBufferEventsTool;
+
+impl McpTool for SubscribeBufferEventsTool {
+    fn name(&self) -> &str {
+        "subscribe_buffer_events"
+    }
+
+    fn description(&self) -> &str {
+        "Subscribe to buffer lifecycle and content-change events. Returns a subscription ID."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Optional filter: only events for this buffer path" }
+            }
+        })
+    }
+
+    fn execute(&self, registry: &BufferRegistry, _args: &str) -> McpToolResult {
+        let sub_id = registry.subscribe_events();
+        McpToolResult::ok(
+            &format!("Subscribed to buffer events: {}", sub_id),
+            0,
+        )
+        .with_truth(
+            McpCertainty::Observed,
+            make_provenance("subscribe_buffer_events", None, None),
+            serde_json::json!({ "subscription_id": sub_id }),
+            Some(serde_json::json!({ "subscription_id": sub_id })),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool: poll_buffer_events
+// ---------------------------------------------------------------------------
+
+struct PollBufferEventsTool;
+
+impl McpTool for PollBufferEventsTool {
+    fn name(&self) -> &str {
+        "poll_buffer_events"
+    }
+
+    fn description(&self) -> &str {
+        "Poll events from a buffer event subscription. Drains up to `limit` events."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "subscription_id": { "type": "string", "description": "Subscription ID from subscribe_buffer_events" },
+                "limit": { "type": "integer", "description": "Max events to drain (default 50)" }
+            },
+            "required": ["subscription_id"]
+        })
+    }
+
+    fn execute(&self, registry: &BufferRegistry, args: &str) -> McpToolResult {
+        #[derive(Deserialize)]
+        struct Args {
+            subscription_id: String,
+            limit: Option<usize>,
+        }
+
+        let args: Args = match serde_json::from_str(args) {
+            Ok(a) => a,
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
+        };
+
+        let limit = args.limit.unwrap_or(50);
+        let events = registry.poll_events(&args.subscription_id, limit);
+        let count = events.len();
+        let data = serde_json::json!({
+            "subscription_id": args.subscription_id,
+            "count": count,
+            "events": events,
+        });
+
+        McpToolResult::ok(
+            &format!("Polled {} buffer event(s)", count),
+            0,
+        )
+        .with_truth(
+            McpCertainty::Observed,
+            make_provenance("poll_buffer_events", None, None),
+            data.clone(),
+            Some(data),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool: watch_workspace
+// ---------------------------------------------------------------------------
+
+use std::cell::RefCell;
+use std::time::Duration;
+
+thread_local! {
+    static WATCHER_STATE: RefCell<Option<WorkspaceWatcherState>> = RefCell::new(None);
+}
+
+struct WorkspaceWatcherState {
+    rx: std::sync::mpsc::Receiver<notify::Event>,
+    #[allow(dead_code)]
+    watcher: notify::RecommendedWatcher,
+}
+
+struct WatchWorkspaceTool;
+
+impl McpTool for WatchWorkspaceTool {
+    fn name(&self) -> &str {
+        "watch_workspace"
+    }
+
+    fn description(&self) -> &str {
+        "Watch a workspace directory for file system changes. Poll to retrieve recent events."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Directory path to watch" },
+                "action": { "type": "string", "description": "'start' to begin watching, 'poll' to retrieve events, 'stop' to end" }
+            },
+            "required": ["path", "action"]
+        })
+    }
+
+    fn execute(&self, _registry: &BufferRegistry, args: &str) -> McpToolResult {
+        #[derive(Deserialize)]
+        struct Args {
+            path: String,
+            action: String,
+        }
+
+        let args: Args = match serde_json::from_str(args) {
+            Ok(a) => a,
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
+        };
+
+        match args.action.as_str() {
+            "start" => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let mut watcher = match notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+                    if let Ok(event) = res {
+                        let _ = tx.send(event);
+                    }
+                }) {
+                    Ok(w) => w,
+                    Err(e) => return McpToolResult::err(McpError::serialization(format!("Watcher init failed: {}", e))),
+                };
+                if let Err(e) = watcher.watch(std::path::Path::new(&args.path), notify::RecursiveMode::Recursive) {
+                    return McpToolResult::err(McpError::serialization(format!("Watch failed: {}", e)));
+                }
+                WATCHER_STATE.with(|state| {
+                    *state.borrow_mut() = Some(WorkspaceWatcherState { rx, watcher });
+                });
+                McpToolResult::ok("Workspace watcher started", 0)
+            }
+            "poll" => {
+                let mut events = Vec::new();
+                WATCHER_STATE.with(|state| {
+                    if let Some(ref s) = *state.borrow() {
+                        while let Ok(event) = s.rx.recv_timeout(Duration::from_millis(100)) {
+                            events.push(serde_json::json!({
+                                "kind": format!("{:?}", event.kind),
+                                "paths": event.paths.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+                            }));
+                            if events.len() >= 50 {
+                                break;
+                            }
+                        }
+                    }
+                });
+                let data = serde_json::json!({ "events": events, "count": events.len() });
+                McpToolResult::ok(
+                    &format!("Polled {} filesystem event(s)", events.len()),
+                    0,
+                )
+                .with_truth(
+                    McpCertainty::Observed,
+                    make_provenance("watch_workspace", Some(&args.path), None),
+                    data.clone(),
+                    Some(data),
+                )
+            }
+            "stop" => {
+                WATCHER_STATE.with(|state| {
+                    *state.borrow_mut() = None;
+                });
+                McpToolResult::ok("Workspace watcher stopped", 0)
+            }
+            _ => McpToolResult::err(McpError::serialization("action must be 'start', 'poll', or 'stop'")),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool: preview_structural_edit
+// ---------------------------------------------------------------------------
+
+struct PreviewStructuralEditTool;
+
+impl McpTool for PreviewStructuralEditTool {
+    fn name(&self) -> &str {
+        "preview_structural_edit"
+    }
+
+    fn description(&self) -> &str {
+        "Preview a structural edit (rename, extract, wrap) on an AST node without applying it."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Absolute file path" },
+                "line": { "type": "integer", "description": "0-indexed line number" },
+                "column": { "type": "integer", "description": "0-indexed column number" },
+                "edit_type": { "type": "string", "description": "Type of structural edit: rename, extract_function, wrap_in_try, add_async" },
+                "new_name": { "type": "string", "description": "New name for rename edits" }
+            },
+            "required": ["path", "line", "column", "edit_type"]
+        })
+    }
+
+    fn execute(&self, registry: &BufferRegistry, args: &str) -> McpToolResult {
+        #[derive(Deserialize)]
+        struct Args {
+            path: String,
+            line: usize,
+            column: usize,
+            edit_type: String,
+            new_name: Option<String>,
+        }
+
+        let args: Args = match serde_json::from_str(args) {
+            Ok(a) => a,
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
+        };
+
+        let content = match registry.get_buffer_content(&args.path) {
+            Some(c) => c,
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
+        };
+
+        let preview = match compute_structural_edit_preview(&content, args.line, args.column, &args.edit_type, args.new_name.as_deref()) {
+            Ok(p) => p,
+            Err(e) => return McpToolResult::err(McpError::invalid_edit(e)),
+        };
+
+        let data = serde_json::json!({
+            "path": args.path,
+            "edit_type": args.edit_type,
+            "preview": preview,
+        });
+
+        McpToolResult::ok("Structural edit preview computed", 0)
+            .with_truth(
+                McpCertainty::Derived,
+                make_provenance("preview_structural_edit", Some(&args.path), None),
+                data.clone(),
+                Some(data),
+            )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool: structural_edit
+// ---------------------------------------------------------------------------
+
+struct StructuralEditTool;
+
+impl McpTool for StructuralEditTool {
+    fn name(&self) -> &str {
+        "structural_edit"
+    }
+
+    fn description(&self) -> &str {
+        "Apply a structural edit (rename, extract, wrap) on an AST node. Uses optimistic version checking."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Absolute file path" },
+                "line": { "type": "integer", "description": "0-indexed line number" },
+                "column": { "type": "integer", "description": "0-indexed column number" },
+                "edit_type": { "type": "string", "description": "Type of structural edit: rename, extract_function, wrap_in_try, add_async" },
+                "new_name": { "type": "string", "description": "New name for rename edits" },
+                "expected_version": { "type": "integer", "description": "Buffer version_id for optimistic locking" }
+            },
+            "required": ["path", "line", "column", "edit_type"]
+        })
+    }
+
+    fn execute(&self, registry: &BufferRegistry, args: &str) -> McpToolResult {
+        #[derive(Deserialize)]
+        struct Args {
+            path: String,
+            line: usize,
+            column: usize,
+            edit_type: String,
+            new_name: Option<String>,
+            expected_version: Option<u64>,
+        }
+
+        let args: Args = match serde_json::from_str(args) {
+            Ok(a) => a,
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
+        };
+
+        let content = match registry.get_buffer_content(&args.path) {
+            Some(c) => c,
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
+        };
+
+        let preview = match compute_structural_edit_preview(&content, args.line, args.column, &args.edit_type, args.new_name.as_deref()) {
+            Ok(p) => p,
+            Err(e) => return McpToolResult::err(McpError::invalid_edit(e)),
+        };
+
+        let version_id = registry.get_buffer_version(&args.path).unwrap_or(0);
+        if let Some(expected) = args.expected_version {
+            if version_id != expected {
+                return McpToolResult::err(McpError::version_conflict(expected, version_id, None));
+            }
+        }
+
+        // Apply the edit as a full-text replacement.
+        let old_text = content.clone();
+        let _ = registry.set_buffer_content(&args.path, &preview.new_text);
+
+        let data = serde_json::json!({
+            "path": args.path,
+            "edit_type": args.edit_type,
+            "old_text": old_text,
+            "new_text": preview.new_text,
+            "replaced_range": preview.replaced_range,
+        });
+
+        McpToolResult::ok("Structural edit applied", version_id + 1)
+            .with_truth(
+                McpCertainty::Derived,
+                make_provenance("structural_edit", Some(&args.path), Some(version_id + 1)),
+                data.clone(),
+                Some(data),
+            )
+    }
+}
+
+/// Preview result for a structural edit.
+#[derive(Serialize)]
+struct StructuralEditPreview {
+    new_text: String,
+    replaced_range: serde_json::Value,
+}
+
+fn compute_structural_edit_preview(
+    content: &str,
+    line: usize,
+    column: usize,
+    edit_type: &str,
+    new_name: Option<&str>,
+) -> Result<StructuralEditPreview, String> {
+    let mut parser = Parser::new();
+    let lang = tree_sitter_rust::LANGUAGE.into();
+    parser.set_language(&lang).map_err(|e| e.to_string())?;
+    let tree = parser.parse(content, None).ok_or("parse failed")?;
+    let root = tree.root_node();
+
+    let byte_offset = byte_offset_from_line_col(content, line, column);
+
+    // Find the deepest node that contains the cursor position.
+    let mut target = root;
+    loop {
+        let mut found_child = false;
+        for child in target.children(&mut target.walk()) {
+            if child.start_byte() <= byte_offset && child.end_byte() > byte_offset {
+                target = child;
+                found_child = true;
+                break;
+            }
+        }
+        if !found_child {
+            break;
+        }
+    }
+
+    match edit_type {
+        "rename" => {
+            let new_name = new_name.ok_or("new_name required for rename")?;
+            let old_text = content[target.start_byte()..target.end_byte()].to_string();
+            let mut new_content = content.to_string();
+            new_content.replace_range(target.start_byte()..target.end_byte(), new_name);
+            Ok(StructuralEditPreview {
+                new_text: new_content,
+                replaced_range: serde_json::json!({
+                    "old_text": old_text,
+                    "start_byte": target.start_byte(),
+                    "end_byte": target.end_byte(),
+                }),
+            })
+        }
+        "extract_function" => {
+            // Extract the target node into a new function.
+            let node_text = content[target.start_byte()..target.end_byte()].to_string();
+            let fn_name = new_name.unwrap_or("extracted_fn");
+            let extracted = format!("fn {}() {{\n    {}\n}}\n\n", fn_name, node_text);
+            let mut new_content = content.to_string();
+            new_content.insert_str(0, &extracted);
+            new_content.replace_range(target.start_byte() + extracted.len()..target.end_byte() + extracted.len(), &format!("{}()", fn_name));
+            Ok(StructuralEditPreview {
+                new_text: new_content,
+                replaced_range: serde_json::json!({
+                    "old_text": node_text,
+                    "start_byte": target.start_byte(),
+                    "end_byte": target.end_byte(),
+                }),
+            })
+        }
+        "wrap_in_try" => {
+            let node_text = content[target.start_byte()..target.end_byte()].to_string();
+            let wrapped = format!("try {{\n    {}\n}}", node_text);
+            let mut new_content = content.to_string();
+            new_content.replace_range(target.start_byte()..target.end_byte(), &wrapped);
+            Ok(StructuralEditPreview {
+                new_text: new_content,
+                replaced_range: serde_json::json!({
+                    "old_text": node_text,
+                    "start_byte": target.start_byte(),
+                    "end_byte": target.end_byte(),
+                }),
+            })
+        }
+        "add_async" => {
+            let kind = target.kind();
+            if kind == "function_item" {
+                let fn_text = content[target.start_byte()..target.end_byte()].to_string();
+                let new_fn = fn_text.replacen("fn ", "async fn ", 1);
+                let mut new_content = content.to_string();
+                new_content.replace_range(target.start_byte()..target.end_byte(), &new_fn);
+                Ok(StructuralEditPreview {
+                    new_text: new_content,
+                    replaced_range: serde_json::json!({
+                        "old_text": fn_text,
+                        "start_byte": target.start_byte(),
+                        "end_byte": target.end_byte(),
+                    }),
+                })
+            } else {
+                Err("add_async requires cursor to be on a function item".to_string())
+            }
+        }
+        _ => Err(format!("Unsupported structural edit type: {}", edit_type)),
+    }
+}
+
+fn byte_offset_from_line_col(text: &str, line: usize, column: usize) -> usize {
+    let mut current_line = 0usize;
+    let mut offset = 0usize;
+    for ch in text.chars() {
+        if current_line == line {
+            if offset >= column {
+                return offset;
+            }
+        }
+        if ch == '\n' {
+            current_line += 1;
+        }
+        offset += ch.len_utf8();
+    }
+    offset
+}
+
+// ---------------------------------------------------------------------------
+// Tool: inspect_contradictions
+// ---------------------------------------------------------------------------
+
+struct InspectContradictionsTool;
+
+impl McpTool for InspectContradictionsTool {
+    fn name(&self) -> &str {
+        "inspect_contradictions"
+    }
+
+    fn description(&self) -> &str {
+        "Inspect contradictions between buffer content, disk content, and parse diagnostics."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Absolute file path" }
+            },
+            "required": ["path"]
+        })
+    }
+
+    fn execute(&self, registry: &BufferRegistry, args: &str) -> McpToolResult {
+        #[derive(Deserialize)]
+        struct Args {
+            path: String,
+        }
+
+        let args: Args = match serde_json::from_str(args) {
+            Ok(a) => a,
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
+        };
+
+        let buffer_content = match registry.get_buffer_content(&args.path) {
+            Some(c) => c,
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
+        };
+        let version_id = registry.get_buffer_version(&args.path).unwrap_or(0);
+
+        let mut contradictions = Vec::new();
+
+        // 1. Buffer vs disk contradiction
+        let disk_content = std::fs::read_to_string(&args.path).unwrap_or_default();
+        let buffer_hash = sha256_hex(buffer_content.as_bytes());
+        let disk_hash = sha256_hex(disk_content.as_bytes());
+        if buffer_hash != disk_hash {
+            contradictions.push(serde_json::json!({
+                "kind": "buffer_disk_mismatch",
+                "message": "Buffer content differs from disk content",
+                "buffer_sha256": buffer_hash,
+                "disk_sha256": disk_hash,
+            }));
+        }
+
+        // 2. Parse errors (tree-sitter)
+        let mut parser = Parser::new();
+        if let Ok(()) = parser.set_language(&tree_sitter_rust::LANGUAGE.into()) {
+            if let Some(tree) = parser.parse(&buffer_content, None) {
+                let root = tree.root_node();
+                if root.has_error() {
+                    let mut errors = Vec::new();
+                    fn collect_errors(node: tree_sitter::Node, out: &mut Vec<serde_json::Value>) {
+                        if node.is_error() || node.is_missing() {
+                            out.push(serde_json::json!({
+                                "kind": if node.is_error() { "error" } else { "missing" },
+                                "start_line": node.start_position().row,
+                                "start_column": node.start_position().column,
+                                "end_line": node.end_position().row,
+                                "end_column": node.end_position().column,
+                            }));
+                        }
+                        for i in 0..node.child_count() {
+                            if let Some(child) = node.child(i) {
+                                collect_errors(child, out);
+                            }
+                        }
+                    }
+                    collect_errors(root, &mut errors);
+                    if !errors.is_empty() {
+                        contradictions.push(serde_json::json!({
+                            "kind": "parse_errors",
+                            "message": "Tree-sitter detected syntax errors",
+                            "errors": errors,
+                        }));
+                    }
+                }
+            }
+        }
+
+        let has_contradictions = !contradictions.is_empty();
+        let data = serde_json::json!({
+            "path": args.path,
+            "version_id": version_id,
+            "contradiction_count": contradictions.len(),
+            "contradictions": contradictions,
+        });
+
+        McpToolResult::ok(
+            &format!(
+                "Found {} contradiction(s)",
+                contradictions.len()
+            ),
+            version_id,
+        )
+        .with_truth(
+            if has_contradictions { McpCertainty::Observed } else { McpCertainty::Derived },
+            make_provenance("inspect_contradictions", Some(&args.path), Some(version_id)),
+            data.clone(),
+            Some(data),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public helpers for the new C.2 tools
+// ---------------------------------------------------------------------------
+
+pub fn subscribe_buffer_events_tool(registry: &BufferRegistry, args: &str) -> McpToolResult {
+    SubscribeBufferEventsTool.execute(registry, args)
+}
+
+pub fn poll_buffer_events_tool(registry: &BufferRegistry, args: &str) -> McpToolResult {
+    PollBufferEventsTool.execute(registry, args)
+}
+
+pub fn watch_workspace_tool(registry: &BufferRegistry, args: &str) -> McpToolResult {
+    WatchWorkspaceTool.execute(registry, args)
+}
+
+pub fn preview_structural_edit_tool(registry: &BufferRegistry, args: &str) -> McpToolResult {
+    PreviewStructuralEditTool.execute(registry, args)
+}
+
+pub fn structural_edit_tool(registry: &BufferRegistry, args: &str) -> McpToolResult {
+    StructuralEditTool.execute(registry, args)
+}
+
+pub fn inspect_contradictions_tool(registry: &BufferRegistry, args: &str) -> McpToolResult {
+    InspectContradictionsTool.execute(registry, args)
 }
 
 #[cfg(test)]

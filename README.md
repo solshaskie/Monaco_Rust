@@ -42,25 +42,25 @@ cargo tauri build --config src-tauri/tauri.conf.json
 ## Current State
 
 - **Rust/Tauri runtime is the authoritative substrate** — buffer state, file operations, LSP client lifecycle, syntax services, and MCP tools are real and verified.
-- **WASM compute lane hardened** — `wasm/` crate ships dead-code-free `diff.rs`, byte-indexed `layout.rs`, LRU-cached `cache.rs` (32MB cap, SHA-256 keying), and `.d.ts` bindings via `wasm-bindgen`.
+- **WASM compute lane hardened** — `wasm/` crate ships tree-sitter backed tokenizer (`tree_sitter_tokenizer.rs`) with native parity, true incremental tokenization via `Tree::edit()` + `parse(old_tree)` (`incremental.rs`), dead-code-free `diff.rs`, byte-indexed `layout.rs`, LRU-cached `cache.rs` (32MB cap, SHA-256 keying), and `.d.ts` bindings via `wasm-bindgen`.
 - **Incremental sync path exists end-to-end** — `src-tauri/src/wasm_sync.rs` plus the frontend WASM sync manager prime and refresh Rust-owned snapshot/delta state on open and edit flows. Token consumers respect the sync barrier during burst edits.
 - **Virtual scroll replacement renderer proven** — `virtual-scroll.js` can mount as the primary renderer for large buffers (>10k lines) via `mountAsPrimary()`. Per-line token hashing eliminates decoration flicker. The `compatibility.js` shim has double-patch guards and idempotent disposal for safe Monaco upgrades.
 - **Security sandbox** — capability-based permissions for file system access with real path containment tests.
-- **MCP agent integration** — Model Context Protocol tools for agent-driven editing, inspection, and structural review.
+- **MCP agent integration** — 22+ Model Context Protocol tools for agent-driven editing, inspection, structural review, event subscription, workspace watching, and contradiction detection.
 - **LSP performance hardened** — debounced diagnostics (150ms), batched `didChange` notifications (50ms), and cached `SyntaxParser` per language.
-- **CI hardened** — cargo audit + cargo deny, SHA-pinned actions, `dtolnay/rust-toolchain` correction, and cargo-fuzz targets that compile on nightly.
+- **CI hardened** — cargo audit + cargo deny, SHA-pinned actions, `dtolnay/rust-toolchain` correction, cargo-fuzz targets on nightly, visual regression baselines with >1% pixel-diff gating, and performance regression baselines with >20% regression gate.
 - **Emancipated build path** — Tauri prep/build no longer depends on project-level Node tooling.
 
 ## Testing
 
 ```bash
-# Rust backend tests (2 pre-existing TypeScript parser failures unrelated to current changes)
+# Rust backend tests (156 passed; 2 pre-existing TypeScript parser failures unrelated to current changes)
 cd src-tauri && cargo test --all-targets
 
 # Prepare frontend bundle without Node
 bash ./scripts/prepare-tauri-dist.sh
 
-# WASM crate tests
+# WASM crate tests (29 passed)
 cd wasm && cargo test
 
 # cargo-fuzz targets (requires nightly)

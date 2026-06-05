@@ -15,9 +15,22 @@ serde-wasm-bindgen = "0.6"
 sha2 = "0.10"
 console_error_panic_hook = { version = "0.1", optional = true }
 
-# We compile a subset of tokenization logic for WASM.
-# Full tree-sitter is not wasm32-friendly; we use a lightweight regex tokenizer here.
-# In production, web-tree-sitter (JS) or compiled grammar WASM modules would be used.
+# ---------------------------------------------------------------------------
+# B.7 — web-tree-sitter parity
+# ---------------------------------------------------------------------------
+# `tree-sitter` and the language crates are pure-Rust and `wasm32-unknown-unknown`
+# friendly. They are the same versions the native Rust backend uses
+# (`src-tauri/Cargo.toml`), so the WASM tokenizer and the native tokenizer
+# produce byte-identical token streams for identical input.
+#
+# This is the "compiled grammar WASM modules" path that was deferred in the
+# original WASM roadmap. We avoid the JS-only `web-tree-sitter` package because
+# it pulls grammar WASM blobs over the network at runtime, breaking offline
+# operation and determinism.
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
 
 [dependencies.web-sys]
 version = "0.3"

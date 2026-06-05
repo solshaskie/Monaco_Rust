@@ -577,10 +577,58 @@ fn close_document(
             path: request.path.clone(),
         },
     );
+    state.buffer_registry().read().push_event(
+        monaco_tauri::buffer::BufferEvent {
+            event_type: "closed".to_string(),
+            resource: request.path.clone(),
+            version_id: None,
+            data: None,
+        },
+    );
     Ok(CloseDocumentJsonResponse {
         closed: response.closed,
         was_dirty: response.was_dirty,
     })
+}
+
+#[derive(Deserialize)]
+struct CloseBuffersBatchJsonRequest {
+    paths: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct CloseBuffersBatchJsonResponse {
+    results: Vec<CloseDocumentJsonResponse>,
+}
+
+#[tauri::command]
+fn close_buffers_batch(
+    app: tauri::AppHandle,
+    state: State<MonacoHostState>,
+    request: CloseBuffersBatchJsonRequest,
+) -> Result<CloseBuffersBatchJsonResponse, String> {
+    let mut registry = state.buffer_registry().write();
+    let mut results = Vec::new();
+    for path in &request.paths {
+        let was_dirty = registry.is_buffer_dirty(path).unwrap_or(false);
+        let closed = registry.close_buffer(path);
+        if closed {
+            EventBroadcaster::emit_buffer_closed(
+                &app,
+                BufferClosedEvent { path: path.clone() },
+            );
+            registry.push_event(
+                monaco_tauri::buffer::BufferEvent {
+                    event_type: "closed".to_string(),
+                    resource: path.clone(),
+                    version_id: None,
+                    data: None,
+                },
+            );
+        }
+        results.push(CloseDocumentJsonResponse { closed, was_dirty });
+    }
+    Ok(CloseBuffersBatchJsonResponse { results })
 }
 
 #[tauri::command]
@@ -1445,6 +1493,7 @@ fn main() {
             set_primary_workspace_root,
             save_document_as,
             close_document,
+            close_buffers_batch,
             apply_edits,
             get_buffer_snapshot,
             undo,

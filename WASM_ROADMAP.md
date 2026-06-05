@@ -147,11 +147,11 @@ Current note: the barrier/cached-tokenization control flow is now wired through 
 - [x] WASM → semantic tokens pipeline returns structured tokens without claiming a fully zero-copy end-to-end path
 - [x] Prioritize viewport-visible lines first
 - [x] Cancel in-flight tokenization jobs on rapid edits
-
-**Success Criteria:**
-- Decorations update without flicker
-- Large file tokenization does not block the main thread
-- Typing never waits on background tokenization
+- [x] Replace hand-rolled heuristic tokenizer with tree-sitter backed tokenizer (`wasm/src/tree_sitter_tokenizer.rs`)
+- [x] Native parity: WASM tokenizer uses same `tree-sitter` crate versions as Rust backend; aligned token-type legend (`keyword`, `identifier`, `string`, `number`, `comment`, `operator`, `type`, `macro`, `delimiter`)
+- [x] Incremental tokenization: `wasm/src/incremental.rs` caches `Parser` + `Tree` per resource and applies `Tree::edit()` on buffer changes, then re-parses with `parse(old_tree)` for O(Δ) token updates
+- [x] LRU token cache keyed by SHA-256 (`wasm/src/cache.rs`) with 32MB cap
+- [x] Parity integration tests: `wasm/tests/parity_native.rs` verifies incremental output matches full re-parse and token types match expected native legend
 
 ### W2.5 Monaco Compatibility Shim
 **Current file:** `tauri/src/renderer/compatibility.js`

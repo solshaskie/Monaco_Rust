@@ -1,7 +1,17 @@
 use crate::buffer::{ContentChange, ModelContentChangedEvent, TextBuffer};
-use parking_lot::RwLock;
-use std::collections::HashMap;
+use parking_lot::{Mutex, RwLock};
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+/// An event describing a buffer lifecycle or content change.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BufferEvent {
+    pub event_type: String,
+    pub resource: String,
+    pub version_id: Option<u64>,
+    pub data: Option<serde_json::Value>,
+}
 
 /// A registry that manages multiple text buffers by their resource URI.
 ///
@@ -12,6 +22,8 @@ use std::sync::Arc;
 pub struct BufferRegistry {
     /// Map of resource URI to text buffer.
     buffers: HashMap<String, Arc<RwLock<TextBuffer>>>,
+    /// Event subscription queues: subscription_id -> queue.
+    event_subscriptions: Arc<Mutex<HashMap<String, VecDeque<BufferEvent>>>>,
 }
 
 impl BufferRegistry {
@@ -19,7 +31,49 @@ impl BufferRegistry {
     pub fn new() -> Self {
         Self {
             buffers: HashMap::new(),
+            event_subscriptions: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Event subscription (C.2 — subscribe_buffer_events + poll_buffer_events)
+    // -----------------------------------------------------------------------
+
+    /// Subscribe to buffer events. Returns a subscription ID.
+    pub fn subscribe_events(&self) -> String {
+        static COUNTER: AtomicU64 = AtomicU64::new(1);
+        let id = format!("sub_{}", COUNTER.fetch_add(1, Ordering::SeqCst));
+        let mut subs = self.event_subscriptions.lock();
+        subs.insert(id.clone(), VecDeque::new());
+        id
+    }
+
+    /// Poll events for a subscription. Drains up to `limit` events.
+    pub fn poll_events(&self, subscription_id: &str, limit: usize) -> Vec<BufferEvent> {
+        let mut subs = self.event_subscriptions.lock();
+        let Some(queue) = subs.get_mut(subscription_id) else {
+            return Vec::new();
+        };
+        let drain_count = queue.len().min(limit);
+        queue.drain(0..drain_count).collect()
+    }
+
+    /// Push an event to all active subscriptions.
+    pub fn push_event(&self, event: BufferEvent) {
+        let mut subs = self.event_subscriptions.lock();
+        for queue in subs.values_mut() {
+            queue.push_back(event.clone());
+            // Cap queue at 1024 events to prevent unbounded growth.
+            if queue.len() > 1024 {
+                queue.pop_front();
+            }
+        }
+    }
+
+    /// Unsubscribe from buffer events.
+    pub fn unsubscribe_events(&self, subscription_id: &str) {
+        let mut subs = self.event_subscriptions.lock();
+        subs.remove(subscription_id);
     }
 
     /// Returns true if a buffer with the given resource is open.

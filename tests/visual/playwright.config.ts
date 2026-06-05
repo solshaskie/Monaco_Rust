@@ -1,8 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 import path from 'path';
+import os from 'os';
 
 /**
- * Visual Regression Test Configuration (W3.2)
+ * Visual Regression Test Configuration (W3.2 / D.2)
  *
  * Tests run against the built Tauri app via WebDriver (tauri-driver).
  * Usage:
@@ -10,10 +11,14 @@ import path from 'path';
  *   2. Start tauri-driver: tauri-driver
  *   3. Run tests: npx playwright test
  *
- * Baseline screenshots are stored in tests/visual/snapshots/.
+ * Baseline screenshots are stored per-platform:
+ *   tests/visual/snapshots/linux/
+ *   tests/visual/snapshots/darwin/
+ *   tests/visual/snapshots/win32/
  * CI fails on >1% pixel diff outside known change zones.
  */
 
+const platform = os.platform();
 const tauriBinary = path.resolve(
   __dirname,
   '../../src-tauri/target/release/monaco-tauri'
@@ -21,14 +26,13 @@ const tauriBinary = path.resolve(
 
 export default defineConfig({
   testDir: '.',
-  snapshotDir: './snapshots',
+  snapshotPathTemplate: `./snapshots/${platform}/{testFilePath}/{arg}{ext}`,
   fullyParallel: false,
   workers: 1,
   reporter: [['html', { open: 'never' }], ['list']],
 
   use: {
     trace: 'on-first-retry',
-    // Connect to tauri-driver WebDriver endpoint
     baseURL: 'http://localhost:4444',
   },
 
@@ -37,7 +41,6 @@ export default defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        // Tauri app viewport
         viewport: { width: 1280, height: 720 },
       },
     },

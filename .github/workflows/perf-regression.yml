@@ -3,8 +3,13 @@ name: Performance Regression
 on:
   push:
     branches: [main, master]
+    tags: ['v*']
   pull_request:
     branches: [main, master]
+
+env:
+  BASELINE_NAME: benchmark-baseline-${{ github.sha }}
+  BASELINE_LATEST: benchmark-baseline-latest
 
 jobs:
   perf-regression:
@@ -27,34 +32,42 @@ jobs:
         uses: arduino/setup-protoc@49933ea5288caeca8642d1e84afbd3f7d6820020 # v3
 
       - name: Run benchmarks
-        run: cd src-tauri && cargo test --test m7_buffer_bench -- --nocapture > ../benchmark-results.txt
+        run: |
+          cd src-tauri
+          cargo test --test m7_buffer_bench -- --nocapture > ../benchmark-results.txt
+          echo ""
+          echo "--- Benchmark summary ---"
+          cat ../benchmark-results.txt
 
-      - name: Download baseline
+      - name: Download version-pinned baseline
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: benchmark-baseline
+          name: ${{ env.BASELINE_LATEST }}
           path: baseline/
         continue-on-error: true
 
-      - name: Compare against baseline
+      - name: Compare against baseline (>20% regression gate)
         run: |
-          echo "Current benchmark results:"
-          cat benchmark-results.txt
           if [ -f baseline/benchmark-results.txt ]; then
             echo ""
-            echo "Baseline results:"
-            cat baseline/benchmark-results.txt
-            echo ""
-            echo "Comparison:"
+            echo "--- Baseline comparison ---"
             python3 .github/scripts/compare_benchmarks.py benchmark-results.txt baseline/benchmark-results.txt
           else
             echo "No baseline found; storing as new baseline."
           fi
 
-      - name: Upload results as new baseline
+      - name: Upload version-pinned baseline
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@7447f04c51f2ba27ca35e7f1e28fab848c5b3ba7 # v4
+        with:
+          name: ${{ env.BASELINE_NAME }}
+          path: benchmark-results.txt
+          overwrite: true
+
+      - name: Upload rolling latest baseline
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@7447f04c51f2ba27ca35e7f1e28fab848c5b3ba7 # v4
         with:
-          name: benchmark-baseline
+          name: ${{ env.BASELINE_LATEST }}
           path: benchmark-results.txt
           overwrite: true

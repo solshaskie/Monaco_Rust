@@ -1,0 +1,58 @@
+[
+  {
+    "token_type": "comment",
+    "text": "// Simple fixture for tokenizer parity tests."
+  },
+  {
+    "token_type": "keyword",
+    "text": "fn"
+  },
+  {
+    "token_type": "identifier",
+    "text": "main"
+  },
+  {
+    "token_type": "delimiter",
+    "text": "("
+  },
+  {
+    "token_type": "delimiter",
+    "text": ")"
+  },
+  {
+    "token_type": "delimiter",
+    "text": "{"
+  },
+  {
+    "token_type": "keyword",
+    "text": "let"
+  },
+  {
+    "token_type": "identifier",
+    "text": "x"
+  },
+  {
+    "token_type": "operator",
+    "text": "="
+  },
+  {
+    "token_type": "number",
+    "text": "42"
+  },
+  {
+    "token_type": "delimiter",
+    "text": ";"
+  },
+  {
+    "token_type": "macro",
+    "text": "println!(\"hello\")"
+  },
+  {
+    "token_type": "delimiter",
+    "text": ";"
+  },
+  {
+    "token_type": "delimiter",
+    "text": "}"
+  }
+]

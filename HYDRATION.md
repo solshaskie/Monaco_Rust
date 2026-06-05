@@ -131,6 +131,19 @@ Monaco_Rust is a local-first Monaco/Tauri editor experiment where Rust owns buff
 - **CI Action SHA Pinning + Name Fixes** (`D.1`) — Pinned all GitHub Actions references across all workflow files to immutable commit SHAs with version comments. Also corrected two broken action references: `dtolnay/rust-action@stable` → `dtolnay/rust-toolchain@stable` and `taiki-e/cache-cargo-install-action@v2` → `v3`.
 - **cargo-fuzz Targets** (`D.4`) — Initialized `src-tauri/fuzz/` with cargo-fuzz. Created three fuzz targets: `fuzz_apply_change` (interprets bytes as ContentChange and applies to TextBuffer), `fuzz_tokenize` (feeds arbitrary bytes to SyntaxParser::for_rust + tokenize_tree), `fuzz_compute_line_delta` (splits bytes into current/old content and runs wasm_sync::compute_line_delta via BufferRegistry). Added `fuzz` CI job to `build.yml` that builds all three targets on nightly Rust.
 
+## Recent Completions (2026-06-05)
+
+- **WASM Tokenizer Parity (B.7)** — Replaced hand-rolled heuristic tokenizer with tree-sitter backed tokenizer (`wasm/src/tree_sitter_tokenizer.rs`). Token types aligned with native backend legend (`keyword`, `identifier`, `string`, `number`, `comment`, `operator`, `type`, `macro`, `delimiter`). Added incremental tokenizer (`wasm/src/incremental.rs`) using `Tree::edit()` + `parse(old_tree)`. Exposed `incremental_init/edit/tokenize/invalidate/clear` via `wasm_bindgen` in `wasm/src/lib.rs`. Added Monaco semantic token type mapping helper (`semantic_token_types`). Parity tests in `wasm/tests/parity_native.rs` verify incremental output matches full re-parse.
+- **Blocked MCP Tools (C.2)** — Unblocked all remaining C.2 tools:
+  - `subscribe_buffer_events` + `poll_buffer_events`: event subscription infrastructure added to `BufferRegistry` with `Arc<Mutex<HashMap<String, VecDeque<BufferEvent>>>>`.
+  - `watch_workspace`: integrated `notify` crate v7; MCP tool supports `start`/`poll`/`stop` lifecycle.
+  - `preview_structural_edit` + `structural_edit`: tree-sitter guided structural edits (`rename`, `extract_function`, `wrap_in_try`, `add_async`) with optimistic version checking.
+  - `inspect_contradictions`: compares buffer content vs disk (SHA-256) and tree-sitter parse errors.
+  - `close_buffers_batch`: implemented as dedicated Tauri command taking `&mut BufferRegistry` via `State<MonacoHostState>`.
+- **CI Hardening (D.1)** — Consolidated redundant `visual-regression.yml` into `build.yml::visual-regression`; deleted the standalone workflow. Added baseline artifact download/upload and `compare_screenshots.py` pixel-diff gate.
+- **Visual Regression Baselines (D.2)** — `tests/visual/playwright.config.ts` uses per-platform snapshot directories (`snapshots/linux/`, `snapshots/darwin/`, `snapshots/win32/`). `.github/scripts/compare_screenshots.py` implements pixel-by-pixel diff with configurable threshold. CI fails on >1% pixel diff.
+- **Performance Regression Baselines (D.3)** — `.github/workflows/perf-regression.yml` stores version-pinned baseline artifacts keyed by git SHA (`benchmark-baseline-${{ github.sha }}`) and a rolling `benchmark-baseline-latest`. `compare_benchmarks.py` enforces `REGRESSION_THRESHOLD = 1.20` (>20% regression = fail).
+
 ## Latest Cleanup
 
 - Fixed the packaging test so it follows the Rust-owned crate version instead of a stale hard-coded artifact name.

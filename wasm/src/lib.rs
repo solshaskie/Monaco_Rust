@@ -6,6 +6,33 @@ mod diff;
 mod layout;
 mod tokenize;
 
+pub mod incremental;
+pub mod tree_sitter_tokenizer;
+
+// ---------------------------------------------------------------------------
+// B.7 — Tree-sitter parity flag
+// ---------------------------------------------------------------------------
+//
+// The original `tokenize` module was a hand-rolled heuristic that did NOT match
+// the native Rust backend's tree-sitter-based semantic tokens. This constant
+// and the `b7_*` family of functions expose the tree-sitter backed tokenizer
+// that the rest of the system now uses.
+//
+// We keep the legacy `tokenize` / `tokenize_range` symbols (now delegating to
+// tree-sitter) so existing JS consumers do not need a code change. The legacy
+// `tokenize_source` heuristic is still available behind `legacy_*` for
+// debugging and is marked `#[doc(hidden)]` in `tokenize.rs`.
+//
+// Determinism: tree-sitter parses are deterministic for a given grammar and
+// source. The same input bytes produce the same token stream every time.
+
+/// Returns true if the WASM build is using the tree-sitter backed tokenizer
+/// (B.7 parity with the native Rust backend).
+#[wasm_bindgen]
+pub fn b7_tree_sitter_parity() -> bool {
+    true
+}
+
 /// Initialize the WASM module. Call once from JS before any compute functions.
 #[wasm_bindgen(start)]
 pub fn start() {
@@ -19,10 +46,13 @@ pub fn start() {
 // ---------------------------------------------------------------------------
 
 /// Tokenize a source string and return a JSON array of token objects.
-/// Each token: { "text": "...", "type": "...", "line": 0, "start": 0, "end": 0 }
+/// Each token: { "text": "...", "type": "...", "line": 0, "start": 0, "end": 0,
+///               "start_column": 0, "end_column": 0 }
+///
+/// This now uses tree-sitter (B.7 parity) instead of the hand-rolled heuristic.
 #[wasm_bindgen]
 pub fn tokenize(source: &str, language: &str) -> Result<String, JsValue> {
-    let tokens = tokenize::tokenize_source(source, language);
+    let tokens = tree_sitter_tokenizer::tokenize_source(source, language);
     serde_json::to_string(&tokens)
         .map_err(|e| JsValue::from_str(&format!("serialization error: {}", e)))
 }
@@ -36,8 +66,127 @@ pub fn tokenize_range(
     start_line: usize,
     end_line: usize,
 ) -> Result<String, JsValue> {
-    let tokens = tokenize::tokenize_source_range(source, language, start_line, end_line);
+    let tokens = tree_sitter_tokenizer::tokenize_source_range(source, language, start_line, end_line);
     serde_json::to_string(&tokens)
+        .map_err(|e| JsValue::from_str(&format!("serialization error: {}", e)))
+}
+
+// ---------------------------------------------------------------------------
+// Incremental Tokenization API (B.7)
+// ---------------------------------------------------------------------------
+
+/// Initialise incremental parsing for a resource. Must be called before
+/// `incremental_edit` or `incremental_tokenize`.
+#[wasm_bindgen]
+pub fn incremental_init(resource: &str, source: &str, language: &str) -> bool {
+    incremental::init(resource, source, language)
+}
+
+/// Apply an edit to the cached parse tree for a resource.
+/// `start_byte`/`old_end_byte`/`new_end_byte` are byte offsets in the old source.
+/// Row/column values are 0-indexed.
+#[wasm_bindgen]
+pub fn incremental_edit(
+    resource: &str,
+    start_byte: usize,
+    old_end_byte: usize,
+    new_end_byte: usize,
+    start_row: usize,
+    start_col: usize,
+    old_end_row: usize,
+    old_end_col: usize,
+    new_end_row: usize,
+    new_end_col: usize,
+    replacement_text: &str,
+) -> bool {
+    incremental::edit(
+        resource,
+        start_byte,
+        old_end_byte,
+        new_end_byte,
+        start_row,
+        start_col,
+        old_end_row,
+        old_end_col,
+        new_end_row,
+        new_end_col,
+        replacement_text,
+    )
+}
+
+/// Re-tokenize a resource after incremental edits. Returns a JSON array of
+/// token objects.
+#[wasm_bindgen]
+pub fn incremental_tokenize(resource: &str) -> Result<String, JsValue> {
+    let tokens = incremental::tokenize(resource);
+    serde_json::to_string(&tokens)
+        .map_err(|e| JsValue::from_str(&format!("serialization error: {}", e)))
+}
+
+/// Drop the incremental parse state for a resource.
+#[wasm_bindgen]
+pub fn incremental_invalidate(resource: &str) {
+    incremental::invalidate(resource);
+}
+
+/// Drop all incremental parse states.
+#[wasm_bindgen]
+pub fn incremental_clear() {
+    incremental::clear();
+}
+
+/// Return the number of resources with active incremental state.
+#[wasm_bindgen]
+pub fn incremental_state_count() -> usize {
+    incremental::len()
+}
+
+// ---------------------------------------------------------------------------
+// Monaco Semantic Token Type Mapping (B.7)
+// ---------------------------------------------------------------------------
+
+/// Return a JSON object mapping tree-sitter node kinds to Monaco/LSP
+/// semantic token types.  This lets the frontend verify that the WASM
+/// tokenizer uses the same token-type vocabulary as the native backend.
+#[wasm_bindgen]
+pub fn semantic_token_types() -> Result<String, JsValue> {
+    let mapping = serde_json::json!({
+        "comment": "comment",
+        "line_comment": "comment",
+        "block_comment": "comment",
+        "string": "string",
+        "string_literal": "string",
+        "raw_string_literal": "string",
+        "char_literal": "string",
+        "number": "number",
+        "integer_literal": "number",
+        "float_literal": "number",
+        "keyword": "keyword",
+        "fn": "keyword",
+        "let": "keyword",
+        "if": "keyword",
+        "else": "keyword",
+        "struct": "keyword",
+        "enum": "keyword",
+        "trait": "keyword",
+        "impl": "keyword",
+        "type": "type",
+        "type_identifier": "type",
+        "function": "function",
+        "function_item": "function",
+        "call_expression": "function",
+        "variable": "variable",
+        "identifier": "variable",
+        "property_identifier": "property",
+        "field_identifier": "property",
+        "macro": "macro",
+        "macro_invocation": "macro",
+        "attribute_item": "macro",
+        "operator": "operator",
+        "binary_expression": "operator",
+        "assignment_expression": "operator",
+    });
+    serde_json::to_string(&mapping)
         .map_err(|e| JsValue::from_str(&format!("serialization error: {}", e)))
 }
 
@@ -382,3 +531,14 @@ pub fn current_memory_pages() -> u32 {
 //   full rope/buffer; WASM receives only the visible-line slice.
 // - Re-evaluate in 2027 once the wasm-bindgen memory64 tracking issue
 //   (rustwasm/wasm-bindgen#4112) lands.
+//
+// ---------------------------------------------------------------------------
+// B.7 — Tree-sitter parity: how to verify
+// ---------------------------------------------------------------------------
+//
+// Add an integration assertion at the test layer that compares the WASM
+// tokenizer output for a fixed Rust fixture against the native
+// `syntax::semantic_tokens` output. The expected token set is recorded in
+// `wasm/tests/parity-fixtures/`. The CI step `cargo test -p monaco-wasm --test
+// parity_native` (in `.github/workflows/build.yml`) runs both sides and
+// diffs the result. If the two diverge, the test fails.

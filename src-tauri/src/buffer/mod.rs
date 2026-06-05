@@ -20,7 +20,7 @@ mod undo;
 pub use content_change::ContentChange;
 pub use line_index::LineIndex;
 pub use position::Position;
-pub use registry::BufferRegistry;
+pub use registry::{BufferEvent, BufferRegistry};
 pub use text_buffer::{
     BufferSnapshot as TextBufferSnapshot, LineRange, ModelContentChangedEvent, TextBuffer,
 };
