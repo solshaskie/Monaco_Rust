@@ -91,6 +91,37 @@ export class WasmDecorationManager {
     this.inlineWidgetDecorations = []; // decoration ids managed by Monaco
     this.inlineWidgetBatch = new DecorationBatch();
     this.inlineWidgetBatch.onFlush = (batch) => this._applyInlineWidgets(batch);
+    this.disposeSyncSubscription = null;
+    this.virtualRenderer = null;
+  }
+
+  setVirtualRenderer(renderer) {
+    this.virtualRenderer = renderer || null;
+    if (!this.virtualRenderer) {
+      return;
+    }
+    const model = this.editor.getModel();
+    if (!model) {
+      return;
+    }
+    const uri = model.uri.toString();
+    const tokens = this.latestTokensByUri.get(uri);
+    if (tokens) {
+      this.virtualRenderer.applyDecorations(tokens);
+    }
+  }
+
+  attachSyncManager(manager) {
+    if (this.disposeSyncSubscription) {
+      this.disposeSyncSubscription();
+      this.disposeSyncSubscription = null;
+    }
+    if (!manager || typeof manager.onUpdate !== 'function') {
+      return;
+    }
+    this.disposeSyncSubscription = manager.onUpdate((event) => {
+      this._handleSyncUpdate(event);
+    });
   }
 
   /**
@@ -176,7 +207,9 @@ export class WasmDecorationManager {
 
     const source = getWasmSyncSource(model);
     const language = model.getLanguageId();
-    const versionId = model.getVersionId();
+    const versionId = path && manager && typeof manager.getVersionId === 'function'
+      ? (manager.getVersionId(path) ?? model.getVersionId())
+      : model.getVersionId();
     const cacheKey = `${uri}@${versionId}`;
 
     // Check cache
@@ -211,12 +244,43 @@ export class WasmDecorationManager {
     }
   }
 
+  _handleSyncUpdate(event) {
+    if (!event || !event.path) {
+      return;
+    }
+    const model = this.editor.getModel();
+    if (!model) {
+      return;
+    }
+    const path = getModelPath(model);
+    if (!path || path !== event.path) {
+      return;
+    }
+
+    if (event.type === 'clear') {
+      this.clearCache();
+      return;
+    }
+
+    if (!event.changed || event.barrierActive) {
+      return;
+    }
+
+    this.clearCache();
+    this.tokenizeViewport(model);
+  }
+
   _queueFromTokens(tokens) {
+    if (this.virtualRenderer) {
+      this.virtualRenderer.applyDecorations(tokens);
+    }
     for (const tok of tokens) {
       const color = TOKEN_COLORS[tok.token_type] || TOKEN_COLORS.identifier;
+      const startColumn = Math.max(1, tok.start_column || 1);
+      const endColumn = Math.max(startColumn, tok.end_column || startColumn);
       this.batch.queue(tok.line, [{
-        start: tok.start,
-        end: tok.end,
+        startColumn,
+        endColumn,
         color,
       }]);
     }
@@ -231,14 +295,14 @@ export class WasmDecorationManager {
     const newLineDecorations = new Map();
 
     for (const [line, decs] of batch) {
-      const hash = decs.map(d => `${d.start}:${d.end}:${d.color}`).join('|');
+      const hash = decs.map(d => `${d.startColumn}:${d.endColumn}:${d.color}`).join('|');
       const lastHash = this.lastLineDecorations.get(line);
       newLineDecorations.set(line, hash);
 
       if (lastHash !== hash) {
         for (const dec of decs) {
           newDecorations.push({
-            range: new monaco.Range(line + 1, dec.start + 1, line + 1, dec.end + 1),
+            range: new monaco.Range(line + 1, dec.startColumn, line + 1, dec.endColumn),
             options: {
               inlineClassName: `token-${dec.color.replace('#', '')}`,
               overviewRuler: { color: dec.color, position: monaco.editor.OverviewRulerLane.Full },
@@ -280,6 +344,10 @@ export class WasmDecorationManager {
   }
 
   clearCache() {
+    if (this.currentDecorations.length) {
+      this.editor.deltaDecorations(this.currentDecorations, []);
+    }
+    this.currentDecorations = [];
     this.tokenCache.clear();
     this.lastLineDecorations.clear();
     this.currentDecorationsByLine.clear();
@@ -289,6 +357,10 @@ export class WasmDecorationManager {
   dispose() {
     this.batch.dispose();
     this.inlineWidgetBatch.dispose();
+    if (this.disposeSyncSubscription) {
+      this.disposeSyncSubscription();
+      this.disposeSyncSubscription = null;
+    }
     const allIds = [];
     for (const ids of this.currentDecorationsByLine.values()) {
       allIds.push(...ids);

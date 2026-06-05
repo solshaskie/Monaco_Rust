@@ -1,6 +1,6 @@
 # Monaco_Rust Hydration Packet
 
-> Read this first when resuming work. This file is intentionally short and verified against the repo on 2026-05-29.
+> Read this first when resuming work. This file is intentionally short and verified against the repo on 2026-06-04.
 
 ## Project in One Sentence
 
@@ -9,22 +9,26 @@ Monaco_Rust is a local-first Monaco/Tauri editor experiment where Rust owns buff
 ## Verified State
 
 - Rust backend compiles and the full `src-tauri` test suite passes.
-- `cargo test --all-targets` passed on 2026-06-04 (149 library tests + integration tests; 2 pre-existing TypeScript parser failures unrelated to current work).
+- `cargo test --all-targets` passed on 2026-06-04 with the suite fully green.
 - Tauri dist preparation, artifact packaging, and WASM rebuild paths now run through local shell scripts, not Node.
 - Current Rust suite totals:
-  - 139 library/unit tests
+  - 159 library/unit tests
+  - 5 command-surface e2e tests in `e2e_command_surface.rs`
+  - 3 event-broadcast e2e tests in `e2e_event_broadcast.rs`
+  - 4 LSP-fallback e2e tests in `e2e_lsp_fallback.rs`
   - 6 integration tests in `m4_integration.rs`
   - 14 protobuf roundtrip tests in `m7_protobuf_roundtrip.rs`
   - 7 benchmark-style regression tests in `m7_buffer_bench.rs`
   - 1 artifact packaging test in `m4_artifact_packaging.rs`
-- Total verified Rust tests: 167+ (149 lib + integration suites).
+  - 4 property tests in `m8_property_tests.rs`
+- Total verified `src-tauri` tests: 203 (159 library/unit + 44 integration/e2e/property/bench/package tests).
 - The artifact packaging contract is now aligned: the test derives the artifact filename from `src-tauri/Cargo.toml`, matching `scripts/package-tauri-artifact.sh`.
 
 ## Architecture Snapshot
 
 - `src-tauri/`
   - The authoritative runtime.
-  - Owns `BufferRegistry`, file I/O, syntax handlers, events, security boundaries, protobuf IPC, and MCP tools.
+  - Owns `BufferRegistry`, file I/O, syntax handlers, events, security boundaries, proto-shaped contracts, JSON IPC, and MCP tools.
 - `tauri/`
   - Frontend shell and WASM glue.
   - Current checked-in surfaces are `index.html`, `wasm-glue.js`, `wasm-tokenizer-provider.js`, and built WASM assets under `tauri/wasm/`.
@@ -63,6 +67,7 @@ Monaco_Rust is a local-first Monaco/Tauri editor experiment where Rust owns buff
 
 - The Rust/Tauri substrate is the strongest part of the repo.
 - The WASM lane is real but still a secondary track, not the authoritative runtime.
+- The core Tauri/Rust/protobuf-contract refactor now clears its standalone test bar; the remaining honesty work is mostly about keeping the advanced WASM/rendering claims proportional to proof.
 - The repo posture is now fully emancipated from Node-era project tooling. Browser JS remains as checked-in runtime assets, but build/package orchestration is Rust/shell owned.
 - `HYDRATION.md` is now calibrated to current repo truth; older counts and blanket “all phases complete” language were removed because they had drifted.
 

@@ -222,8 +222,11 @@
   </div>
   <script src="/vendor/monaco-editor/min/vs/loader.js"></script>
   <script>
+    const LARGE_DOCUMENT_SPARSE_THRESHOLD_BYTES = 8 * 1024 * 1024;
+
     const state = {
       editor: null,
+      shim: null,
       rootPath: "",
       currentPath: "",
       currentVersionId: 1,
@@ -231,6 +234,8 @@
       tabs: [],
       remoteEditPaths: new Set(),
       wasmSync: null,
+      sparseViewer: null,
+      virtualScrollModule: null,
       tokenCache: new Map(),
       foldingCache: new Map(),
       semanticTokensCache: new Map(),
@@ -300,8 +305,148 @@
       if (dom.languageStatus) dom.languageStatus.textContent = message;
     }
 
+    function getRendererTestState() {
+      var shim = state.shim;
+      var renderer = shim && shim.virtualRenderer ? shim.virtualRenderer : null;
+      var monacoDom = state.editor
+        ? state.editor.getContainerDomNode().querySelector(".lines-content")
+        : null;
+      var activeLines = renderer
+        ? Array.from(renderer.activeNodes.keys()).sort(function (a, b) { return a - b; })
+        : [];
+      return {
+        hasEditor: !!state.editor,
+        hasShim: !!shim,
+        isVirtualRendererActive: !!renderer,
+        hiddenMonacoLines: !!(monacoDom && monacoDom.style.visibility === "hidden"),
+        totalLines: renderer ? renderer.totalLines : 0,
+        activeLineCount: activeLines.length,
+        firstActiveLine: activeLines.length ? activeLines[0] : null,
+        lastActiveLine: activeLines.length ? activeLines[activeLines.length - 1] : null
+      };
+    }
+
+    function installTestHooks() {
+      window.__monacoRustTest = {
+        getRendererState: function () {
+          return getRendererTestState();
+        },
+        createLargeModel: async function (options) {
+          if (!state.editor || !window.monaco) {
+            throw new Error("Editor not ready");
+          }
+          options = options || {};
+          var lineCount = options.lineCount || 12050;
+          var languageId = options.languageId || "rust";
+          var path = options.path || "/tmp/large-buffer-proof.rs";
+          var lines = new Array(lineCount);
+          for (var i = 0; i < lineCount; i++) {
+            lines[i] = i === Math.floor(lineCount / 2)
+              ? "fn focus_line() { let marker = 41; }\n"
+              : "fn line_" + i + "() { let value_" + i + " = " + i + "; }\n";
+          }
+          var model = window.monaco.editor.createModel(
+            lines.join(""),
+            languageId,
+            fileUri(path)
+          );
+          state.editor.setModel(model);
+          if (state.shim && typeof state.shim._syncPrimaryRenderer === "function") {
+            state.shim._syncPrimaryRenderer();
+          }
+          await new Promise(function (resolve) { requestAnimationFrame(resolve); });
+          return getRendererTestState();
+        },
+        scrollEditor: async function (scrollTop) {
+          var renderer = state.shim && state.shim.virtualRenderer ? state.shim.virtualRenderer : null;
+          if (renderer && renderer.container) {
+            renderer.container.scrollTop = scrollTop;
+          } else if (state.editor && typeof state.editor.setScrollTop === "function") {
+            state.editor.setScrollTop(scrollTop);
+          }
+          await new Promise(function (resolve) { requestAnimationFrame(resolve); });
+          return getRendererTestState();
+        },
+        editLine: async function (lineNumber, text) {
+          if (!state.editor || !window.monaco) {
+            throw new Error("Editor not ready");
+          }
+          var model = state.editor.getModel();
+          if (!model) {
+            throw new Error("No model");
+          }
+          var maxColumn = model.getLineMaxColumn(lineNumber);
+          model.applyEdits([{
+            range: new window.monaco.Range(lineNumber, 1, lineNumber, maxColumn),
+            text: text
+          }]);
+          await new Promise(function (resolve) { requestAnimationFrame(resolve); });
+          return model.getLineContent(lineNumber);
+        },
+        getLineText: function (lineNumber) {
+          if (!state.editor) return null;
+          var model = state.editor.getModel();
+          return model ? model.getLineContent(lineNumber) : null;
+        },
+        setSmallModel: async function () {
+          if (!state.editor || !window.monaco) {
+            throw new Error("Editor not ready");
+          }
+          var model = window.monaco.editor.createModel(
+            "fn main() {\n    println!(\"small\");\n}\n",
+            "rust",
+            fileUri("/tmp/small-buffer-proof.rs")
+          );
+          state.editor.setModel(model);
+          if (state.shim && typeof state.shim._syncPrimaryRenderer === "function") {
+            state.shim._syncPrimaryRenderer();
+          }
+          await new Promise(function (resolve) { requestAnimationFrame(resolve); });
+          return getRendererTestState();
+        },
+        openSparseLargeDocument: async function (path) {
+          return invoke("open_large_document", {
+            request: {
+              path: path
+            }
+          });
+        },
+        readSparseViewport: async function (sessionId, startLine, lineCount) {
+          return invoke("read_large_document_viewport", {
+            request: {
+              session_id: sessionId,
+              start_line: startLine,
+              line_count: lineCount
+            }
+          });
+        },
+        closeSparseLargeDocument: async function (sessionId) {
+          return invoke("close_large_document", {
+            request: {
+              session_id: sessionId
+            }
+          });
+        }
+      };
+    }
+
     function basename(path) {
       return path.split("/").filter(Boolean).pop() || path;
+    }
+
+    function formatBytes(bytes) {
+      if (!Number.isFinite(bytes) || bytes <= 0) return "";
+      if (bytes < 1024) return bytes + " B";
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+      return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
+    function getWorkspaceEntry(path) {
+      return state.entries.find((entry) => entry.path === path) || null;
+    }
+
+    function isSparseCandidate(entry) {
+      return !!entry && !entry.is_directory && entry.size >= LARGE_DOCUMENT_SPARSE_THRESHOLD_BYTES;
     }
 
     function fileUri(path) {
@@ -419,7 +564,9 @@
       for (const entry of entries) {
         const button = document.createElement("button");
         button.className = "file-entry" + (entry.path === state.currentPath ? " active" : "");
-        button.textContent = entry.name;
+        button.textContent = isSparseCandidate(entry)
+          ? entry.name + " [sparse " + formatBytes(entry.size) + "]"
+          : entry.name;
         button.addEventListener("click", () => openDocument(entry.path));
         fileList.appendChild(button);
       }
@@ -444,7 +591,7 @@
 
         const label = document.createElement("span");
         label.className = "tab-label";
-        label.textContent = tab.name;
+        label.textContent = tab.kind === "sparse" ? tab.name + " [sparse]" : tab.name;
         tabButton.appendChild(label);
 
         const close = document.createElement("button");
@@ -467,13 +614,77 @@
       return state.tabs.find((tab) => tab.path === path);
     }
 
-    function activateTab(path) {
+    async function ensureVirtualScrollModule() {
+      if (!state.virtualScrollModule) {
+        state.virtualScrollModule = await import('./src/renderer/virtual-scroll.js');
+      }
+      return state.virtualScrollModule;
+    }
+
+    async function disposeSparseViewer() {
+      if (state.sparseViewer && state.sparseViewer.renderer) {
+        state.sparseViewer.renderer.destroy();
+      }
+      state.sparseViewer = null;
+    }
+
+    async function activateSparseTab(tab) {
+      if (!state.editor) {
+        return;
+      }
+      if (state.shim && typeof state.shim._syncPrimaryRenderer === "function") {
+        state.editor.setModel(null);
+        state.shim._syncPrimaryRenderer();
+      } else {
+        state.editor.setModel(null);
+      }
+
+      const mod = await ensureVirtualScrollModule();
+      const renderer = new mod.VirtualScrollRenderer(dom.container);
+      renderer.mountAsPrimary(state.editor, null);
+      await renderer.setSparseSource(tab.lineCount, async function (startLine, lineCount) {
+        return invoke("read_large_document_viewport", {
+          request: {
+            session_id: tab.sessionId,
+            start_line: startLine,
+            line_count: lineCount
+          }
+        });
+      });
+      state.sparseViewer = {
+        path: tab.path,
+        sessionId: tab.sessionId,
+        renderer: renderer
+      };
+      setLanguageStatus(
+        "Sparse view: " +
+        (tab.languageId || "plaintext") +
+        " • " +
+        tab.lineCount +
+        " lines • " +
+        formatBytes(tab.byteLength)
+      );
+      setStatus("Opened sparse large-file view " + tab.path);
+    }
+
+    async function activateTab(path) {
       const tab = getOpenTab(path);
       if (!tab || !state.editor) {
         return;
       }
 
+      if (state.sparseViewer && state.sparseViewer.path !== tab.path) {
+        await disposeSparseViewer();
+      }
+
       state.currentPath = tab.path;
+      if (tab.kind === "sparse") {
+        state.currentVersionId = 1;
+        await activateSparseTab(tab);
+        scheduleRender();
+        return;
+      }
+
       state.currentVersionId = tab.model.getAlternativeVersionId();
       state.editor.setModel(tab.model);
       scheduleRender();
@@ -493,23 +704,40 @@
       const [tab] = state.tabs.splice(tabIndex, 1);
       const wasActive = tab.path === state.currentPath;
 
-      try {
-        await invoke("close_document", {
-          request: {
-            path: tab.path,
-            save_if_dirty: false
-          }
-        });
-      } catch (error) {
-        console.error("close_document failed", error);
+      if (tab.kind === "sparse") {
+        try {
+          await invoke("close_large_document", {
+            request: {
+              session_id: tab.sessionId
+            }
+          });
+        } catch (error) {
+          console.error("close_large_document failed", error);
+        }
+      } else {
+        try {
+          await invoke("close_document", {
+            request: {
+              path: tab.path,
+              save_if_dirty: false
+            }
+          });
+        } catch (error) {
+          console.error("close_document failed", error);
+        }
       }
 
-      tab.model.dispose();
+      if (tab.model) {
+        tab.model.dispose();
+      }
+      if (tab.kind === "sparse" && wasActive) {
+        await disposeSparseViewer();
+      }
 
       if (wasActive) {
         const nextTab = state.tabs[tabIndex] || state.tabs[tabIndex - 1];
         if (nextTab) {
-          activateTab(nextTab.path);
+          await activateTab(nextTab.path);
         } else if (state.editor) {
           state.currentPath = "";
           state.currentVersionId = 1;
@@ -541,10 +769,42 @@
       setStatus("Workspace ready");
     }
 
+    async function openSparseDocument(path, entry) {
+      const existingTab = getOpenTab(path);
+      if (existingTab) {
+        await activateTab(path);
+        return;
+      }
+
+      const response = await invoke("open_large_document", {
+        request: {
+          path: path
+        }
+      });
+      state.tabs.push({
+        kind: "sparse",
+        path: response.path,
+        name: basename(response.path),
+        model: null,
+        sessionId: response.session_id,
+        lineCount: response.line_count,
+        byteLength: response.byte_length,
+        languageId: response.language_id,
+        size: entry ? entry.size : response.byte_length
+      });
+      await activateTab(response.path);
+    }
+
     async function openDocument(path) {
       const existingTab = getOpenTab(path);
       if (existingTab) {
-        activateTab(path);
+        await activateTab(path);
+        return;
+      }
+
+      const entry = getWorkspaceEntry(path);
+      if (isSparseCandidate(entry)) {
+        await openSparseDocument(path, entry);
         return;
       }
 
@@ -596,6 +856,7 @@
       });
 
       state.tabs.push({
+        kind: "model",
         path: response.path,
         name: basename(response.path),
         model: model
@@ -606,6 +867,9 @@
         } catch (error) {
           console.warn("WASM sync prime failed", error);
         }
+      }
+      if (state.sparseViewer) {
+        await disposeSparseViewer();
       }
       state.currentPath = response.path;
       state.currentVersionId = response.version_id || 1;
@@ -829,6 +1093,12 @@
         return;
       }
 
+      const tab = getOpenTab(state.currentPath);
+      if (tab && tab.kind === "sparse") {
+        setStatus("Sparse large-file view is read-only");
+        return;
+      }
+
       const model = state.editor.getModel();
       if (!model) {
         setStatus("No active model");
@@ -867,6 +1137,7 @@
         minimap: { enabled: false },
         hover: { enabled: true }
       });
+      installTestHooks();
 
       configureLanguageDefaults(window.monaco);
 

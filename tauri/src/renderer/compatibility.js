@@ -8,6 +8,9 @@
 
 import { WasmDecorationManager, registerTokenStyles } from './decoration-manager.js';
 import { computeLayout } from '../../wasm-glue.js';
+import { VirtualScrollRenderer } from './virtual-scroll.js';
+
+const PRIMARY_RENDERER_LINE_THRESHOLD = 10_000;
 
 /**
  * Wraps a Monaco editor instance to intercept key APIs and
@@ -24,6 +27,7 @@ export class MonacoCompatibilityShim {
     this.editor = editor;
     this.wasmDecorations = null;
     this.wasmLayout = null; // cached per-model layout from WASM
+    this.virtualRenderer = null;
     this._disposed = false;
 
     // Guard against double-patching if constructor is called twice
@@ -112,18 +116,79 @@ export class MonacoCompatibilityShim {
   enableWasmTokenization() {
     if (this.wasmDecorations) return;
     this.wasmDecorations = new WasmDecorationManager(this.editor);
-
-    // Re-tokenize on content change
-    const model = this.editor.getModel();
-    if (model) {
-      this._disposables = [
-        model.onDidChangeContent(() => {
-          this.wasmDecorations.clearCache();
+    this.wasmDecorations.attachSyncManager(window.wasmBufferSync);
+    this._contentDisposable = null;
+    this._disposables = [
+      this.editor.onDidChangeModel(() => {
+        this._attachActiveModel();
+      }),
+      this.editor.onDidScrollChange(() => {
+        const model = this.editor.getModel();
+        if (model) {
           this.wasmDecorations.tokenizeViewport(model);
-        }),
-      ];
-      this.wasmDecorations.tokenizeViewport(model);
+        }
+      }),
+      this.editor.onDidLayoutChange(() => {
+        this._syncPrimaryRenderer();
+      }),
+    ];
+    this._attachActiveModel();
+  }
+
+  _attachActiveModel() {
+    if (!this.wasmDecorations) {
+      return;
     }
+    if (this._contentDisposable) {
+      this._contentDisposable.dispose();
+      this._contentDisposable = null;
+    }
+
+    const model = this.editor.getModel();
+    this.wasmDecorations.clearCache();
+    if (!model) {
+      this._syncPrimaryRenderer();
+      return;
+    }
+
+    this._contentDisposable = model.onDidChangeContent(() => {
+      this.wasmDecorations.clearCache();
+      this._syncPrimaryRenderer();
+      this.wasmDecorations.tokenizeViewport(model);
+    });
+    this._syncPrimaryRenderer();
+    this.wasmDecorations.tokenizeViewport(model);
+  }
+
+  _shouldUsePrimaryRenderer(model) {
+    return !!model && model.getLineCount() >= PRIMARY_RENDERER_LINE_THRESHOLD;
+  }
+
+  _syncPrimaryRenderer() {
+    const model = this.editor.getModel();
+    if (!this._shouldUsePrimaryRenderer(model)) {
+      if (this.virtualRenderer) {
+        this.wasmDecorations?.setVirtualRenderer(null);
+        this.virtualRenderer.destroy();
+        this.virtualRenderer = null;
+      }
+      return;
+    }
+
+    const container = this.editor.getContainerDomNode();
+    if (!container) {
+      return;
+    }
+
+    if (!this.virtualRenderer) {
+      this.virtualRenderer = new VirtualScrollRenderer(container);
+      this.virtualRenderer.mountAsPrimary(this.editor, this);
+      this.wasmDecorations?.setVirtualRenderer(this.virtualRenderer);
+    }
+
+    this.virtualRenderer.setSource(model.getValue()).catch((error) => {
+      console.warn('[CompatibilityShim] Virtual renderer source sync failed:', error);
+    });
   }
 
   _deltaDecorations(oldDecorations, newDecorations) {
@@ -175,14 +240,23 @@ export class MonacoCompatibilityShim {
     delete this.editor.__wasmShimPatched;
 
     if (this.wasmDecorations) {
+      this.wasmDecorations.setVirtualRenderer(null);
       this.wasmDecorations.dispose();
       this.wasmDecorations = null;
+    }
+    if (this.virtualRenderer) {
+      this.virtualRenderer.destroy();
+      this.virtualRenderer = null;
     }
     if (this._disposables) {
       for (const d of this._disposables) {
         d.dispose();
       }
       this._disposables = null;
+    }
+    if (this._contentDisposable) {
+      this._contentDisposable.dispose();
+      this._contentDisposable = null;
     }
     for (const disposable of this._codeLensProviders) {
       disposable.dispose();

@@ -2,7 +2,7 @@
 
 This document outlines a phased approach to refactoring Monaco Editor to integrate with the Tauri/Rust/Protobuf architecture. The goal is to create a high-performance, agentic workspace with unified serialization, native security boundaries, and radical performance improvements.
 
-> **Status on 2026-06-03:** Phases 1 through 7 of the core Monaco_Rust refactor are substantially complete. The deferred WASM/custom-renderer lane ([`WASM_ROADMAP.md`](./WASM_ROADMAP.md)), external LSP integration (completion, diagnostics, code actions), and host-level testing (cross-platform CI, E2E proofs, visual regression pipeline) are now all landed. Read [`README.md`](./README.md) and [`HYDRATION.md`](./HYDRATION.md) for current runtime truth.
+> **Status on 2026-06-04:** Phases 1 through 7 of the core Monaco_Rust refactor now clear their standalone finish bar: the Rust/Tauri runtime, protobuf-shaped contract layer, JSON IPC seam, LSP integration, MCP truth surface, and host-level test suite are all live and passing. The deferred WASM/custom-renderer lane is real and useful, but its maturity is still mixed; use [`WASM_ROADMAP.md`](./WASM_ROADMAP.md) for the honest status of renderer-specific proof.
 >
 > **Post-review state:** A full-spectrum adversarial review ([`ADVERSARIAL_REVIEW.md`](./ADVERSARIAL_REVIEW.md)) identified 10 P0 security/correctness issues, 37 P1 performance/correctness issues, and 47+ P2 quality issues. The sequenced remediation plan lives in [`ADVERSARIAL_ROADMAP.md`](./ADVERSARIAL_ROADMAP.md) and should be consulted before any new feature work.
 
@@ -24,7 +24,7 @@ This document outlines a phased approach to refactoring Monaco Editor to integra
 │  │  • Headless Buffer Registry • Language Features              ││
 │  └─────────────────────────────────────────────────────────────┘│
 └───────────────────────────┬─────────────────────────────────────┘
-                            │ Tauri IPC (Protobuf)
+                            │ Tauri IPC (JSON over invoke; proto-shaped contracts)
                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Tauri Backend (Rust)                          │

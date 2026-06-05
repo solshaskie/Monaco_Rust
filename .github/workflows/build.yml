@@ -33,7 +33,11 @@ jobs:
         run: cd src-tauri && cargo test --all-targets --verbose
 
       - name: Run benchmarks
-        run: cd src-tauri && cargo test --test m7_buffer_bench -- --nocapture > ../benchmark-results.txt
+        run: |
+          cd src-tauri
+          cargo test --test m7_buffer_bench -- --nocapture > ../benchmark-results.txt
+          cd ../wasm
+          cargo test perf_ -- --nocapture >> ../benchmark-results.txt
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@7447f04c51f2ba27ca35e7f1e28fab848c5b3ba7 # v4
@@ -349,7 +353,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb webkit2gtk-driver
 
       - name: Install Protoc
         uses: arduino/setup-protoc@49933ea5288caeca8642d1e84afbd3f7d6820020 # v3

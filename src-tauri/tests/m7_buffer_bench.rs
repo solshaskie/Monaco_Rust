@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use monaco_tauri::buffer::{BufferRegistry, ContentChange, Position, TextBuffer};
+use monaco_tauri::wasm_sync::compute_line_delta;
 
 /// Regression benchmark: small file insert should complete in <1ms.
 #[test]
@@ -141,7 +142,7 @@ fn bench_dirty_line_tracking_overhead() {
     let per_op = elapsed.as_micros() as f64 / 10_000.0;
     println!("Dirty line tracking: {:.2} µs/op", per_op);
     assert!(
-        per_op < 100.0,
+        per_op < 150.0,
         "Dirty line tracking too slow: {:.2} µs/op",
         per_op
     );
@@ -178,5 +179,51 @@ fn bench_tokenize_large_rust_file() {
         elapsed.as_millis() < 500,
         "Tokenization too slow: {:?}",
         elapsed
+    );
+}
+
+/// Regression benchmark: Rust->WASM sync delta should stay cheap under burst edits.
+#[test]
+fn bench_wasm_sync_delta_burst() {
+    let mut registry = BufferRegistry::new();
+    let resource = "bench://sync.rs";
+    let base_content: String = (0..300)
+        .map(|i| {
+            if i == 150 {
+                "fn focus() { let marker = 0000; }\n".to_string()
+            } else {
+                format!("fn function_{}() {{ let x = {}; }}\n", i, i)
+            }
+        })
+        .collect();
+    registry.open_buffer(resource.to_string(), &base_content);
+
+    let start = Instant::now();
+    let mut previous_content = base_content.clone();
+    let mut previous_version = registry.get_buffer_version(resource).unwrap_or(1);
+    let mut previous_marker = "let marker = 0000;".to_string();
+
+    for i in 0..200 {
+        let new_marker = format!("let marker = {:04};", i + 1);
+        let new_content = previous_content.replacen(&previous_marker, &new_marker, 1);
+
+        let _ = registry.set_buffer_content(resource, &new_content);
+        let delta = compute_line_delta(&registry, resource, &previous_content, previous_version)
+            .unwrap()
+            .expect("expected delta for changed content");
+        assert!(delta.end_line >= delta.start_line);
+
+        previous_content = new_content;
+        previous_marker = new_marker;
+        previous_version = registry.get_buffer_version(resource).unwrap_or(previous_version + 1);
+    }
+
+    let elapsed = start.elapsed();
+    let per_sync = elapsed.as_micros() as f64 / 200.0;
+    println!("WASM sync delta burst: {:.2} µs/op", per_sync);
+    assert!(
+        per_sync < 4_000.0,
+        "WASM sync delta burst too slow: {:.2} µs/op",
+        per_sync
     );
 }

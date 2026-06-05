@@ -27,10 +27,15 @@ export class VirtualScrollRenderer {
     this.lineHeight = options.lineHeight || LINE_HEIGHT_PX;
     this.overscroll = options.overscroll || OVERSCROLL_LINES;
     this.source = '';
+    this.lines = [];
+    this.loadedLines = new Map();
     this.totalLines = 0;
     this.scrollTop = 0;
     this.viewportHeight = container.clientHeight || 600;
     this.wasmLayout = null; // per-line layout from WASM (for variable heights)
+    this._mountedMonacoLinesContent = null;
+    this.sparseLoader = null;
+    this.pendingSparseLoads = new Map();
 
     // DOM node pool
     this.pool = [];
@@ -93,7 +98,21 @@ export class VirtualScrollRenderer {
    */
   async setSource(source) {
     this.source = source;
+    this.sparseLoader = null;
+    this.lines = source.split('\n');
+    this.loadedLines.clear();
     this.totalLines = await countLines(source);
+    this._updateSpacer();
+    this._renderViewport();
+  }
+
+  async setSparseSource(totalLines, sparseLoader) {
+    this.source = '__sparse__';
+    this.lines = [];
+    this.loadedLines.clear();
+    this.totalLines = totalLines;
+    this.sparseLoader = sparseLoader;
+    this.pendingSparseLoads.clear();
     this._updateSpacer();
     this._renderViewport();
   }
@@ -126,6 +145,7 @@ export class VirtualScrollRenderer {
 
     const startLine = Math.max(0, visible.start_line - this.overscroll);
     const endLine = Math.min(this.totalLines, visible.end_line + this.overscroll);
+    this._requestSparseViewport(startLine, endLine);
 
     // Precompute cumulative Y offsets for variable-height lines
     const yOffsets = new Array(endLine + 1);
@@ -134,9 +154,6 @@ export class VirtualScrollRenderer {
       const h = this._lineHeight(i);
       yOffsets[i + 1] = yOffsets[i] + h;
     }
-
-    // Get lines from source
-    const lines = this.source.split('\n');
 
     // Recycle nodes that are no longer needed
     const neededLines = new Set();
@@ -163,13 +180,63 @@ export class VirtualScrollRenderer {
         continue;
       }
 
-      const lineText = lines[i] || '';
+      const lineText = this._getLineText(i);
       const node = this._acquireNode(i, lineText);
       node.style.transform = `translateY(${y}px)`;
       node.style.height = `${this._lineHeight(i)}px`;
       this.contentLayer.appendChild(node);
       this.activeNodes.set(i, node);
     }
+  }
+
+  _getLineText(lineIndex) {
+    if (this.sparseLoader) {
+      return this.loadedLines.get(lineIndex) || '';
+    }
+    return this.lines[lineIndex] || '';
+  }
+
+  _requestSparseViewport(startLine, endLine) {
+    if (!this.sparseLoader || endLine <= startLine) {
+      return;
+    }
+    const key = `${startLine}:${endLine}`;
+    if (this.pendingSparseLoads.has(key)) {
+      return;
+    }
+    let missing = false;
+    for (let i = startLine; i < endLine; i++) {
+      if (!this.loadedLines.has(i)) {
+        missing = true;
+        break;
+      }
+    }
+    if (!missing) {
+      return;
+    }
+
+    const promise = Promise.resolve(this.sparseLoader(startLine, endLine - startLine))
+      .then((slice) => {
+        if (!slice || typeof slice.content !== 'string') {
+          return;
+        }
+        const lines = slice.content.split('\n');
+        if (lines.length && lines[lines.length - 1] === '') {
+          lines.pop();
+        }
+        const baseLine = typeof slice.start_line === 'number' ? slice.start_line : startLine;
+        for (let i = 0; i < lines.length; i++) {
+          this.loadedLines.set(baseLine + i, lines[i]);
+        }
+        this._renderViewport();
+      })
+      .catch((error) => {
+        console.warn('[VirtualScrollRenderer] Sparse viewport load failed:', error);
+      })
+      .finally(() => {
+        this.pendingSparseLoads.delete(key);
+      });
+    this.pendingSparseLoads.set(key, promise);
   }
 
   _lineHeight(lineIndex) {
@@ -217,11 +284,21 @@ export class VirtualScrollRenderer {
       byLine.set(tok.line, arr);
     }
 
+    // Clear stale highlighting for visible lines that no longer have tokens.
+    for (const [line, node] of this.activeNodes) {
+      if (!byLine.has(line) && this.lastTokenHashByLine.has(line)) {
+        node.textContent = this._getLineText(line);
+        this.lastTokenHashByLine.delete(line);
+      }
+    }
+
     for (const [line, lineTokens] of byLine) {
       const node = this.activeNodes.get(line);
       if (!node) continue;
 
-      const hash = lineTokens.map(t => `${t.start}:${t.end}:${t.token_type}`).join('|');
+      const hash = lineTokens
+        .map(t => `${t.start_column}:${t.end_column}:${t.token_type}`)
+        .join('|');
       const lastHash = this.lastTokenHashByLine.get(line);
       if (hash === lastHash) continue; // No change → skip DOM write
 
@@ -235,20 +312,26 @@ export class VirtualScrollRenderer {
   }
 
   _highlightLine(text, tokens, defaultColor) {
-    // Sort tokens by start position
-    const sorted = tokens.slice().sort((a, b) => a.start - b.start);
+    // Sort tokens by line-local columns. WASM token byte offsets are absolute
+    // within the parsed source, so renderer-side slicing must use columns.
+    const sorted = tokens.slice().sort((a, b) => {
+      const aStart = Math.max(0, (a.start_column || 1) - 1);
+      const bStart = Math.max(0, (b.start_column || 1) - 1);
+      return aStart - bStart;
+    });
     let result = '';
     let pos = 0;
     for (const tok of sorted) {
-      const start = Math.max(pos, tok.start);
+      const start = Math.max(pos, Math.max(0, (tok.start_column || 1) - 1));
+      const end = Math.max(start, Math.max(0, (tok.end_column || tok.start_column || 1) - 1));
       if (start > pos) {
         result += this._escapeHtml(text.slice(pos, start));
       }
-      if (tok.end > start) {
+      if (end > start) {
         const color = TOKEN_COLORS[tok.token_type] || defaultColor;
-        result += `<span style="color:${color}">${this._escapeHtml(text.slice(start, tok.end))}</span>`;
+        result += `<span style="color:${color}">${this._escapeHtml(text.slice(start, end))}</span>`;
       }
-      pos = Math.max(pos, tok.end);
+      pos = Math.max(pos, end);
     }
     if (pos < text.length) {
       result += this._escapeHtml(text.slice(pos));
@@ -278,11 +361,19 @@ export class VirtualScrollRenderer {
     const monacoDom = container.querySelector('.lines-content');
     if (monacoDom) {
       monacoDom.style.visibility = 'hidden';
+      this._mountedMonacoLinesContent = monacoDom;
+    }
+    const containerChanged = this.container && this.container !== container;
+    if (containerChanged) {
+      this.container.removeEventListener('scroll', this._onScroll);
     }
     // Move our content layer into Monaco's container
     container.appendChild(this.contentLayer);
     container.appendChild(this.spacer);
     this.container = container;
+    if (containerChanged) {
+      this.container.addEventListener('scroll', this._onScroll, { passive: true });
+    }
     this._onResize();
 
     // Wire model changes back through the shim
@@ -294,12 +385,22 @@ export class VirtualScrollRenderer {
     }
   }
 
+  unmountPrimary() {
+    if (this._mountedMonacoLinesContent) {
+      this._mountedMonacoLinesContent.style.visibility = '';
+      this._mountedMonacoLinesContent = null;
+    }
+  }
+
   destroy() {
     this.container.removeEventListener('scroll', this._onScroll);
     window.removeEventListener('resize', this._onResize);
+    this.unmountPrimary();
     this.contentLayer.remove();
     this.spacer.remove();
     this.lastTokenHashByLine.clear();
+    this.pendingSparseLoads.clear();
+    this.loadedLines.clear();
   }
 }
 

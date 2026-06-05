@@ -39,15 +39,16 @@ Some of the checkbox lists below were written as target-state markers and now ov
 |------|----------------|-------|
 | W1.1 WASM crate/build path | Landed | `wasm/` crate exists, builds through `build/wasm/build.sh`, and frontend loading is present. |
 | W1.2 JS/WASM glue | Partial | `tauri/wasm-glue.js` exists and exposes compute helpers, and the frontend now primes/refreshes WASM shadow state through Rust-backed sync commands on open/edit/event flows. |
-| W1.3 Incremental sync | Partial | `src-tauri/src/wasm_sync.rs` now feeds a real frontend shadow-sync path, and the frontend token consumers now honor the sync barrier during burst edits, but the latency/perf success criteria still need fresh proof. |
-| W2.1 Layout compute | Partial | WASM layout and visible-line helpers exist, but the performance success criteria have not been re-proved recently. |
-| W2.2 Virtual scrolling | Prototype | `tauri/src/renderer/virtual-scroll.js` exists as an alternate renderer path, not a proven replacement for Monaco's default renderer. |
+| W1.3 Incremental sync | Partial | `src-tauri/src/wasm_sync.rs` now feeds a real frontend shadow-sync path, the frontend token consumers honor the sync barrier during burst edits, and `bench_wasm_sync_delta_burst` now provides a repeatable perf proof surface in `src-tauri/tests/m7_buffer_bench.rs`. |
+| S1 Sparse large-file viewport seam | Landed as first substrate slice | `src-tauri/src/sparse_file.rs` plus `open_large_document` / `read_large_document_viewport` / `close_large_document` now provide a host-owned, read-only sparse session path for viewport slicing without full editor-buffer hydration, and the live app can route oversized files into that seam. |
+| W2.1 Layout compute | Partial | WASM layout and visible-line helpers exist, and `perf_layout_large_source` plus `perf_visible_lines_hot_loop` now provide repeatable perf proof surfaces in `wasm/src/layout.rs`; broader renderer-level proof is still thinner than the core Rust substrate. |
+| W2.2 Virtual scrolling | Prototype | `tauri/src/renderer/virtual-scroll.js` is now live-wired through `compatibility.js` for large models, but still needs broader behavioral proof before it can be treated as a proven Monaco replacement. |
 | W2.3 Decorations | Prototype | Decoration management code exists, but the no-flicker and minimal-mutation claims still need stronger proof. |
 | W2.4 Tokenizer pool | Partial | WASM tokenization exists, but there is no real cancellation pool or proven background scheduling layer yet. |
-| W2.5 Compatibility shim | Prototype | `tauri/src/renderer/compatibility.js` provides adapters and graceful fallback, but most Monaco compatibility claims are not yet broad proof. |
-| W3 Visual/E2E | Mostly planned | No repo-owned `tests/e2e`, `tests/visual`, or visual-regression workflow currently exist. |
-| W3 Perf regression | Partial | `src-tauri/tests/m7_buffer_bench.rs` exists, but there is no dedicated perf workflow/history gate. |
-| W4 CI/release | Partial | Build and release workflows exist, but full cross-platform test proof and signed/nightly automation are not landed. |
+| W2.5 Compatibility shim | Prototype | `tauri/src/renderer/compatibility.js` now owns large-buffer primary-renderer promotion plus graceful fallback, but broader compatibility proof is still pending. |
+| W3 Visual/E2E | Landed for core Rust/app seams; frontend harness still mixed | Repo-owned `src-tauri/tests/e2e_*` plus targeted live-app proof surfaces now exist, including `tests/visual/sparse-large-document.webdriver.mjs` for the sparse large-file seam. The screenshot/Playwright lane still exists as repo-owned proof surface material, but it should not yet be treated as the authoritative live-app harness until its transport is cleaned up. |
+| W3 Perf regression | Landed | `src-tauri/tests/m7_buffer_bench.rs` plus `perf-regression.yml` provide a real baseline/gating path. |
+| W4 CI/release | Partial | Build, nightly, perf-regression, and release workflows exist, but signed distribution and broad custom-renderer cross-platform proof are still not fully closed. |
 
 ---
 
@@ -99,7 +100,22 @@ Some of the checkbox lists below were written as target-state markers and now ov
 - Sync latency <4ms per batch
 - WASM never has stale buffer state
 
-Current note: the barrier/cached-tokenization control flow is now wired through the JS consumers, but the quantitative perf targets above have not been freshly re-measured in-repo.
+Current note: the barrier/cached-tokenization control flow is now wired through the JS consumers, and the repo now carries an explicit burst-delta benchmark (`bench_wasm_sync_delta_burst`) for this seam. The remaining gap is not "no perf surface exists" but broader historical/CI evidence and deeper end-to-end renderer proof.
+
+### S1 Sparse Large-File Viewport Seam
+**Current files:** `src-tauri/src/sparse_file.rs`, `src-tauri/src/main.rs`
+
+- [x] Open a large file as a read-only sparse host session without hydrating the normal in-memory editor buffer
+- [x] Build sampled line checkpoints on the Rust side so viewport requests can seek near the target instead of re-reading from byte 0
+- [x] Read exact line slices `[start_line, start_line + count)` from disk on demand
+- [x] Keep this seam explicit and separate from the normal editable Monaco model path
+
+**Success Criteria:**
+- Large files can be inspected through viewport slices without forcing full JS/editor hydration
+- Sparse viewport reads remain exact and line-stable
+- The normal editable buffer registry remains untouched for sparse-session reads
+
+Current note: this is the first honest gigabyte-file substrate slice, not the end-state. It proves host-owned sparse truth and viewport serving, and the repo now has both Rust and direct WebDriver proof surfaces for that seam, but not yet full sparse editing, sparse undo/redo, or Monaco-native sparse-model substitution.
 
 ---
 
@@ -187,14 +203,14 @@ Current note: the barrier/cached-tokenization control flow is now wired through 
 ### W3.2 Visual Regression Testing
 **New files:** `tests/visual/`, `.github/workflows/visual-regression.yml`
 
-- [x] Capture screenshots of the editor at fixed states (empty, file open, with errors, with completions)
-- [x] Use Playwright or Puppeteer for screenshot comparison
+- [x] Capture repo-owned proof surfaces for fixed editor states and targeted live-app seams
+- [ ] Reconcile screenshot transport so visual comparison is driven by a valid live-app harness instead of the stale Playwright/WebDriver assumption
 - [x] Establish baseline images per platform (macOS, Linux, Windows)
 - [x] Fail CI on >1% pixel diff outside known change zones
 
 **Success Criteria:**
-- UI changes that affect rendering are flagged automatically
-- False positive rate <5%
+- Targeted live-app seams can be exercised through a transport that matches Tauri's WebDriver model
+- Screenshot-based visual regression becomes authoritative only after the harness transport is repaired
 
 ### W3.3 Performance Regression Testing
 **New files:** `tests/perf/`, `.github/workflows/perf-regression.yml`

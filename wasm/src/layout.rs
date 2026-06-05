@@ -85,6 +85,7 @@ pub fn position_in_wrapped_line(line: &str, byte_offset: usize, line_width: usiz
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     #[test]
     fn layout_computes_char_counts() {
@@ -123,5 +124,45 @@ mod tests {
         let (col, wrap) = position_in_wrapped_line("hello world", 6, 5);
         assert_eq!(col, 1);
         assert_eq!(wrap, 1);
+    }
+
+    #[test]
+    fn perf_layout_large_source() {
+        let source: String = (0..20_000)
+            .map(|i| format!("let variable_{} = {} + {} + {};\n", i, i, i + 1, i + 2))
+            .collect();
+
+        let start = Instant::now();
+        let layout = compute_line_layout(&source, 120);
+        let elapsed = start.elapsed();
+        let per_line = elapsed.as_nanos() as f64 / layout.len() as f64;
+
+        println!("WASM layout (20k lines): {:.1} ns/line", per_line);
+        assert_eq!(layout.len(), 20_000);
+        assert!(
+            elapsed.as_millis() < 250,
+            "WASM layout too slow: {:?}",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn perf_visible_lines_hot_loop() {
+        let total_lines = 100_000usize;
+        let start = Instant::now();
+        for i in 0..100_000usize {
+            let scroll_top = ((i % 50_000) as f64) * 20.0;
+            let visible = compute_visible_lines(total_lines, 20.0, scroll_top, 800.0);
+            assert!(visible.end_line >= visible.start_line);
+        }
+        let elapsed = start.elapsed();
+        let per_call = elapsed.as_nanos() as f64 / 100_000.0;
+
+        println!("WASM visible lines hot loop: {:.1} ns/op", per_call);
+        assert!(
+            per_call < 5_000.0,
+            "WASM visible lines too slow: {:.1} ns/op",
+            per_call
+        );
     }
 }

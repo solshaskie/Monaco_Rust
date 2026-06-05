@@ -35,6 +35,8 @@ jobs:
         run: |
           cd src-tauri
           cargo test --test m7_buffer_bench -- --nocapture > ../benchmark-results.txt
+          cd ../wasm
+          cargo test perf_ -- --nocapture >> ../benchmark-results.txt
           echo ""
           echo "--- Benchmark summary ---"
           cat ../benchmark-results.txt

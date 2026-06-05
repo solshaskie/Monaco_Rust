@@ -12,6 +12,7 @@ use crate::mcp::McpToolRegistry;
 use crate::proto::code::ipc::editor;
 use crate::proto::code::ipc::editor::host;
 use crate::proto::code::ipc::file;
+use crate::sparse_file::SparseFileSessionManager;
 use crate::security::{
     CapabilityRegistry, Permission, Principal, PrincipalKind, SandboxLimits, SecuritySandbox,
 };
@@ -84,6 +85,8 @@ pub struct MonacoHostState {
     app_handle: Mutex<Option<tauri::AppHandle>>,
     /// Cached MCP tool registry, built once on startup.
     mcp_tool_registry: McpToolRegistry,
+    /// Read-only sparse large-file sessions for viewport streaming.
+    sparse_sessions: SparseFileSessionManager,
 }
 
 impl Default for MonacoHostState {
@@ -154,6 +157,7 @@ impl MonacoHostState {
             did_change_tasks: Mutex::new(HashMap::new()),
             app_handle: Mutex::new(None),
             mcp_tool_registry: McpToolRegistry::with_defaults(),
+            sparse_sessions: SparseFileSessionManager::new(),
         }
     }
 
@@ -216,6 +220,10 @@ impl MonacoHostState {
 
     pub fn mcp_tool_registry(&self) -> &McpToolRegistry {
         &self.mcp_tool_registry
+    }
+
+    pub fn sparse_sessions(&self) -> &SparseFileSessionManager {
+        &self.sparse_sessions
     }
 
     /// Abort any in-flight diagnostic task for `path` and insert `handle`.
@@ -366,7 +374,7 @@ fn validate_canonical_under_workspace(state: &MonacoHostState, canonical: &Path)
 }
 
 /// Validate a path for read access (open_document, list_directory).
-fn validate_read_path(state: &MonacoHostState, path: &Path) -> Result<PathBuf, String> {
+pub fn validate_read_path(state: &MonacoHostState, path: &Path) -> Result<PathBuf, String> {
     let normalized = normalize_path_for_check(path)?;
     validate_canonical_under_workspace(state, &normalized)?;
     Ok(normalized)
@@ -964,7 +972,7 @@ fn created_millis(metadata: &fs::Metadata) -> Option<i64> {
         .map(|duration| duration.as_millis() as i64)
 }
 
-fn uri_to_path(resource: &file::Uri) -> Result<PathBuf, String> {
+pub fn uri_to_path(resource: &file::Uri) -> Result<PathBuf, String> {
     if !resource.scheme.is_empty() && resource.scheme != "file" {
         return Err(format!("unsupported URI scheme: {}", resource.scheme));
     }
@@ -1001,7 +1009,7 @@ fn detect_language_id(path: &Path) -> String {
     .to_string()
 }
 
-fn detect_language_id_from_path(path: &str) -> String {
+pub fn detect_language_id_from_path(path: &str) -> String {
     detect_language_id(Path::new(path))
 }
 

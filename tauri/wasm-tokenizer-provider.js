@@ -181,8 +181,9 @@ function encodeSemanticTokens(tokens) {
 
   for (const tok of tokens) {
     const line = tok.line;
-    const startChar = tok.start;
-    const length = tok.end - tok.start;
+    const startChar = Math.max(0, (tok.start_column || 1) - 1);
+    const endChar = Math.max(startChar, (tok.end_column || tok.start_column || 1) - 1);
+    const length = Math.max(0, endChar - startChar);
     const tokenType = mapToSemanticTokenType(tok.token_type);
     const tokenModifiers = 0;
 

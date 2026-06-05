@@ -3,7 +3,6 @@ use std::path::Path;
 
 use monaco_tauri::host_handlers;
 use monaco_tauri::host_handlers::MonacoHostState;
-use monaco_tauri::proto::code::ipc::editor;
 use monaco_tauri::proto::code::ipc::editor::host;
 use monaco_tauri::proto::code::ipc::editor::language;
 use monaco_tauri::proto::code::ipc::file;

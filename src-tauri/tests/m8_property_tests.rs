@@ -1,8 +1,8 @@
 use monaco_tauri::buffer::{ContentChange, LineIndex, Position, TextBuffer};
 use proptest::prelude::*;
 
-/// Property: LineIndex::offset_to_line and line_start_offset are consistent.
-/// For every line in the index, the line's start offset maps back to that line.
+// Property: LineIndex::offset_to_line and line_start_offset are consistent.
+// For every line in the index, the line's start offset maps back to that line.
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 

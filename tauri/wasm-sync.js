@@ -51,7 +51,15 @@ export class WasmBufferSyncManager {
     this.buffers = new Map();
     this.heartbeatTimers = new Map();
     this.syncBarriers = new Map();
+    this.listeners = new Set();
     this.heartbeatMs = heartbeatMs;
+  }
+
+  onUpdate(listener) {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   /**
@@ -79,9 +87,11 @@ export class WasmBufferSyncManager {
     return new Promise((resolve) => {
       const timer = setTimeout(async () => {
         this.heartbeatTimers.delete(path);
+        const previousVersionId = this.getVersionId(path);
         try {
-          const result = await this.refresh(path);
+          const result = await this._syncJson(path, this.buffers.get(path));
           this.syncBarriers.delete(path);
+          this._emitBufferUpdate('refresh-settled', path, previousVersionId);
           resolve(result);
         } catch (error) {
           this.syncBarriers.delete(path);
@@ -102,38 +112,30 @@ export class WasmBufferSyncManager {
     for (const [path, timer] of timers) {
       clearTimeout(timer);
       this.syncBarriers.set(path, true);
+      const previousVersionId = this.getVersionId(path);
       try {
-        await this.refresh(path);
+        await this._syncJson(path, this.buffers.get(path));
       } catch (e) {
         // ignore
       }
       this.syncBarriers.delete(path);
+      this._emitBufferUpdate('flush-settled', path, previousVersionId);
     }
   }
 
   async prime(path) {
-    const response = await this.invoke('wasm_sync_state_json', {
-      request: {
-        path,
-        previous_content: null,
-        previous_version_id: null,
-      },
-    });
-    this._consume(path, response);
-    return this.buffers.get(path) || null;
+    const previousVersionId = this.getVersionId(path);
+    const buffer = await this._syncJson(path, null);
+    this._emitBufferUpdate('prime', path, previousVersionId);
+    return buffer;
   }
 
   async refresh(path) {
     const previous = this.buffers.get(path);
-    const response = await this.invoke('wasm_sync_state_json', {
-      request: {
-        path,
-        previous_content: previous ? previous.content : null,
-        previous_version_id: previous ? previous.versionId : null,
-      },
-    });
-    this._consume(path, response);
-    return this.buffers.get(path) || null;
+    const previousVersionId = previous ? previous.versionId : null;
+    const buffer = await this._syncJson(path, previous);
+    this._emitBufferUpdate('refresh', path, previousVersionId);
+    return buffer;
   }
 
   async primeBinary(path) {
@@ -170,6 +172,7 @@ export class WasmBufferSyncManager {
   }
 
   clear(path) {
+    const previousVersionId = this.getVersionId(path);
     if (this.heartbeatTimers.has(path)) {
       clearTimeout(this.heartbeatTimers.get(path));
       this.heartbeatTimers.delete(path);
@@ -179,6 +182,7 @@ export class WasmBufferSyncManager {
     if (this.wasmMod && typeof this.wasmMod.invalidate_token_cache === 'function') {
       this.wasmMod.invalidate_token_cache(path);
     }
+    this._emitBufferUpdate('clear', path, previousVersionId);
   }
 
   getBuffer(path) {
@@ -188,6 +192,47 @@ export class WasmBufferSyncManager {
   getContent(path) {
     const entry = this.buffers.get(path);
     return entry ? entry.content : null;
+  }
+
+  getVersionId(path) {
+    const entry = this.buffers.get(path);
+    return entry ? entry.versionId : null;
+  }
+
+  _emit(event) {
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        console.warn('[WasmBufferSyncManager] update listener failed', error);
+      }
+    }
+  }
+
+  _emitBufferUpdate(type, path, previousVersionId) {
+    const buffer = this.buffers.get(path) || null;
+    const versionId = buffer ? buffer.versionId : null;
+    this._emit({
+      type,
+      path,
+      buffer,
+      versionId,
+      previousVersionId,
+      changed: previousVersionId !== versionId,
+      barrierActive: this.isSyncBarrierActive(path),
+    });
+  }
+
+  async _syncJson(path, previous) {
+    const response = await this.invoke('wasm_sync_state_json', {
+      request: {
+        path,
+        previous_content: previous ? previous.content : null,
+        previous_version_id: previous ? previous.versionId : null,
+      },
+    });
+    this._consume(path, response);
+    return this.buffers.get(path) || null;
   }
 
   _consume(path, response) {

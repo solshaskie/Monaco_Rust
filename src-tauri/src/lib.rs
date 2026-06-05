@@ -5,6 +5,7 @@ pub mod lsp;
 pub mod mcp;
 pub mod proto;
 pub mod security;
+pub mod sparse_file;
 pub mod syntax;
 pub mod syntax_handlers;
 pub mod wasm_sync;

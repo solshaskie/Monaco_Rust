@@ -19,6 +19,9 @@ It is built to take the veteran strengths of Monaco and rehouse them inside a so
 Monaco_Rust does not claim to be the whole workspace organism.
 It claims to be a disciplined surface and runtime seam for exact text, exact state, exact structure, and higher-order integration.
 
+Its strongest completed layer today is the sovereign Rust/Tauri runtime and contract surface.
+Its hybrid WASM/rendering lane is real and increasingly capable, but remains additive rather than authoritative.
+
 ## What Monaco_Rust Brings
 
 ### 1. A Sovereign Local Editor Runtime
@@ -33,8 +36,11 @@ It owns locally:
 - version tracking
 - undo/redo
 - snapshot retrieval
+- sparse large-file viewport sessions
 
 This makes it useful wherever another project needs a precise human-facing editing surface backed by governed local authority.
+
+It also now has the first explicit seam for host-owned large-file inspection: Rust can hold a file as a sparse session and serve viewport slices without requiring the normal editable buffer path to hydrate the whole document.
 
 ### 2. Explicit Contracts Instead of Hidden Coupling
 
@@ -145,6 +151,19 @@ The repo now stands on:
 - shell-based WASM rebuild flow
 
 That matters because it reduces inherited constraint and makes the asset easier to reshape around purpose.
+
+### 8. Standalone and Donor Readiness
+
+Monaco_Rust now clears a real standalone finish bar for its core substrate.
+
+The Rust/Tauri runtime, contract layer, MCP surface, and host-level test suite are green and usable in their own right.
+
+That makes the project suitable not only as a local editor/runtime in direct use, but as donor architecture for future work such as:
+
+- VS Code Rust refactor experiments
+- extension-host restructuring
+- local-first editing/runtime optimization work
+- new governed workstation ideas built on exact state and explicit seams
 
 ## What Monaco_Rust Does Not Claim
 

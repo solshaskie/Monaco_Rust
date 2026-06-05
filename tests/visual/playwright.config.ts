@@ -1,15 +1,20 @@
 import { defineConfig, devices } from '@playwright/test';
-import path from 'path';
 import os from 'os';
 
 /**
  * Visual Regression Test Configuration (W3.2 / D.2)
  *
- * Tests run against the built Tauri app via WebDriver (tauri-driver).
+ * This file is still an experimental screenshot surface, not the authoritative
+ * live-app Tauri harness. For real live-app proof use the direct WebDriver
+ * script in `tests/visual/sparse-large-document.webdriver.mjs`.
+ *
+ * The old `tauri-driver --native-driver <app-binary>` wiring was incorrect:
+ * `--native-driver` expects the platform WebDriver binary, not the Tauri app.
  * Usage:
  *   1. Build the Tauri app: cd src-tauri && cargo build --release
- *   2. Start tauri-driver: tauri-driver
- *   3. Run tests: npx playwright test
+ *   2. Ensure the native WebKit driver exists (Linux: `webkit2gtk-driver`)
+ *   3. Start tauri-driver: tauri-driver
+ *   4. Run tests: npx playwright test
  *
  * Baseline screenshots are stored per-platform:
  *   tests/visual/snapshots/linux/
@@ -19,10 +24,6 @@ import os from 'os';
  */
 
 const platform = os.platform();
-const tauriBinary = path.resolve(
-  __dirname,
-  '../../src-tauri/target/release/monaco-tauri'
-);
 
 export default defineConfig({
   testDir: '.',
@@ -47,7 +48,7 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: `tauri-driver --native-driver ${tauriBinary}`,
+    command: 'tauri-driver',
     url: 'http://localhost:4444/status',
     reuseExistingServer: !process.env.CI,
     timeout: 120 * 1000,

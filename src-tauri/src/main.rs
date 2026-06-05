@@ -37,6 +37,46 @@ struct OpenDocumentJson {
 }
 
 #[derive(Deserialize)]
+struct OpenLargeDocumentJsonRequest {
+    path: String,
+}
+
+#[derive(Serialize)]
+struct OpenLargeDocumentJsonResponse {
+    session_id: String,
+    path: String,
+    language_id: String,
+    byte_length: u64,
+    line_count: usize,
+    checkpoint_stride: usize,
+}
+
+#[derive(Deserialize)]
+struct ReadLargeDocumentViewportJsonRequest {
+    session_id: String,
+    start_line: usize,
+    line_count: usize,
+}
+
+#[derive(Serialize)]
+struct ReadLargeDocumentViewportJsonResponse {
+    session_id: String,
+    start_line: usize,
+    end_line: usize,
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct CloseLargeDocumentJsonRequest {
+    session_id: String,
+}
+
+#[derive(Serialize)]
+struct CloseLargeDocumentJsonResponse {
+    closed: bool,
+}
+
+#[derive(Deserialize)]
 struct SaveDocumentJsonRequest {
     path: String,
     content: String,
@@ -455,6 +495,64 @@ fn open_document(
         language_id: response.language_id,
         content: String::from_utf8((&*snapshot.content_utf8).to_vec()).map_err(|err| err.to_string())?,
         version_id: snapshot.version_id,
+    })
+}
+
+#[tauri::command]
+fn open_large_document(
+    state: State<MonacoHostState>,
+    request: OpenLargeDocumentJsonRequest,
+) -> Result<OpenLargeDocumentJsonResponse, String> {
+    let resource = file_uri_from_path(&request.path);
+    let path = host_handlers::uri_to_path(&resource)?;
+    let _validated = host_handlers::validate_read_path(&state, &path)?;
+
+    let principal = monaco_tauri::security::Principal {
+        id: "user".to_string(),
+        kind: monaco_tauri::security::PrincipalKind::User,
+    };
+    if !state.capabilities().check(
+        &principal,
+        monaco_tauri::security::Permission::ReadFile,
+        &request.path,
+    ) {
+        return Err("permission denied: read_file".to_string());
+    }
+
+    let session = state.sparse_sessions().open_session(&path)?;
+    Ok(OpenLargeDocumentJsonResponse {
+        session_id: session.session_id,
+        path: request.path.clone(),
+        language_id: host_handlers::detect_language_id_from_path(&request.path),
+        byte_length: session.byte_length,
+        line_count: session.line_count,
+        checkpoint_stride: session.checkpoint_stride,
+    })
+}
+
+#[tauri::command]
+fn read_large_document_viewport(
+    state: State<MonacoHostState>,
+    request: ReadLargeDocumentViewportJsonRequest,
+) -> Result<ReadLargeDocumentViewportJsonResponse, String> {
+    let slice = state
+        .sparse_sessions()
+        .read_viewport(&request.session_id, request.start_line, request.line_count)?;
+    Ok(ReadLargeDocumentViewportJsonResponse {
+        session_id: request.session_id,
+        start_line: slice.start_line,
+        end_line: slice.end_line,
+        content: slice.content,
+    })
+}
+
+#[tauri::command]
+fn close_large_document(
+    state: State<MonacoHostState>,
+    request: CloseLargeDocumentJsonRequest,
+) -> Result<CloseLargeDocumentJsonResponse, String> {
+    Ok(CloseLargeDocumentJsonResponse {
+        closed: state.sparse_sessions().close_session(&request.session_id),
     })
 }
 
@@ -1489,6 +1587,9 @@ fn main() {
             workspace_roots,
             list_directory,
             open_document,
+            open_large_document,
+            read_large_document_viewport,
+            close_large_document,
             save_document,
             set_primary_workspace_root,
             save_document_as,

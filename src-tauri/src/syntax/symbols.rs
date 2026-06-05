@@ -23,79 +23,22 @@ pub fn extract_document_symbols(tree: &Tree, source: &str) -> Vec<DocumentSymbol
 
 fn traverse_for_symbols(node: &Node, source: &str, symbols: &mut Vec<DocumentSymbol>) {
     match node.kind() {
-        "function_item" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node
-                    .utf8_text(source.as_bytes())
-                    .unwrap_or("")
-                    .to_string();
-                symbols.push(DocumentSymbol {
-                    name,
-                    detail: "function".to_string(),
-                    kind: "function".to_string(),
-                    start_line: node.start_position().row as u32 + 1,
-                    start_column: node.start_position().column as u32 + 1,
-                    end_line: node.end_position().row as u32 + 1,
-                    end_column: node.end_position().column as u32 + 1,
-                    children: Vec::new(),
-                });
-            }
+        "function_item" | "function_declaration" => {
+            push_named_symbol(node, source, symbols, "function", "function", Vec::new());
         }
         "struct_item" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node
-                    .utf8_text(source.as_bytes())
-                    .unwrap_or("")
-                    .to_string();
-                let children = extract_field_children(node, source);
-                symbols.push(DocumentSymbol {
-                    name,
-                    detail: "struct".to_string(),
-                    kind: "struct".to_string(),
-                    start_line: node.start_position().row as u32 + 1,
-                    start_column: node.start_position().column as u32 + 1,
-                    end_line: node.end_position().row as u32 + 1,
-                    end_column: node.end_position().column as u32 + 1,
-                    children,
-                });
-            }
+            let children = extract_field_children(node, source);
+            push_named_symbol(node, source, symbols, "struct", "struct", children);
         }
-        "enum_item" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node
-                    .utf8_text(source.as_bytes())
-                    .unwrap_or("")
-                    .to_string();
-                let children = extract_enum_variant_children(node, source);
-                symbols.push(DocumentSymbol {
-                    name,
-                    detail: "enum".to_string(),
-                    kind: "enum".to_string(),
-                    start_line: node.start_position().row as u32 + 1,
-                    start_column: node.start_position().column as u32 + 1,
-                    end_line: node.end_position().row as u32 + 1,
-                    end_column: node.end_position().column as u32 + 1,
-                    children,
-                });
-            }
+        "enum_item" | "enum_declaration" => {
+            let children = extract_enum_variant_children(node, source);
+            push_named_symbol(node, source, symbols, "enum", "enum", children);
         }
-        "trait_item" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node
-                    .utf8_text(source.as_bytes())
-                    .unwrap_or("")
-                    .to_string();
-                symbols.push(DocumentSymbol {
-                    name,
-                    detail: "trait".to_string(),
-                    kind: "interface".to_string(),
-                    start_line: node.start_position().row as u32 + 1,
-                    start_column: node.start_position().column as u32 + 1,
-                    end_line: node.end_position().row as u32 + 1,
-                    end_column: node.end_position().column as u32 + 1,
-                    children: Vec::new(),
-                });
-            }
+        "trait_item" | "interface_declaration" => {
+            push_named_symbol(node, source, symbols, "trait", "interface", Vec::new());
+        }
+        "class_declaration" => {
+            push_named_symbol(node, source, symbols, "class", "class", Vec::new());
         }
         "impl_item" => {
             if let Some(type_node) = node.child_by_field_name("type") {
@@ -103,120 +46,30 @@ fn traverse_for_symbols(node: &Node, source: &str, symbols: &mut Vec<DocumentSym
                     .utf8_text(source.as_bytes())
                     .unwrap_or("")
                     .to_string();
-                symbols.push(DocumentSymbol {
-                    name,
-                    detail: "impl".to_string(),
-                    kind: "class".to_string(),
-                    start_line: node.start_position().row as u32 + 1,
-                    start_column: node.start_position().column as u32 + 1,
-                    end_line: node.end_position().row as u32 + 1,
-                    end_column: node.end_position().column as u32 + 1,
-                    children: Vec::new(),
-                });
+                symbols.push(make_symbol(node, name, "impl", "class", Vec::new()));
             }
         }
-        "mod_item" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node
-                    .utf8_text(source.as_bytes())
-                    .unwrap_or("")
-                    .to_string();
-                symbols.push(DocumentSymbol {
-                    name,
-                    detail: "mod".to_string(),
-                    kind: "module".to_string(),
-                    start_line: node.start_position().row as u32 + 1,
-                    start_column: node.start_position().column as u32 + 1,
-                    end_line: node.end_position().row as u32 + 1,
-                    end_column: node.end_position().column as u32 + 1,
-                    children: Vec::new(),
-                });
-            }
+        "mod_item" | "module" | "internal_module" => {
+            push_named_symbol(node, source, symbols, "mod", "module", Vec::new());
         }
-        "const_item" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node
-                    .utf8_text(source.as_bytes())
-                    .unwrap_or("")
-                    .to_string();
-                symbols.push(DocumentSymbol {
-                    name,
-                    detail: "const".to_string(),
-                    kind: "constant".to_string(),
-                    start_line: node.start_position().row as u32 + 1,
-                    start_column: node.start_position().column as u32 + 1,
-                    end_line: node.end_position().row as u32 + 1,
-                    end_column: node.end_position().column as u32 + 1,
-                    children: Vec::new(),
-                });
-            }
+        "const_item" | "variable_declarator" => {
+            push_named_symbol(node, source, symbols, "const", "constant", Vec::new());
+        }
+        "lexical_declaration" => {
+            extract_variable_declaration_children(node, source, symbols);
         }
         "static_item" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node
-                    .utf8_text(source.as_bytes())
-                    .unwrap_or("")
-                    .to_string();
-                symbols.push(DocumentSymbol {
-                    name,
-                    detail: "static".to_string(),
-                    kind: "constant".to_string(),
-                    start_line: node.start_position().row as u32 + 1,
-                    start_column: node.start_position().column as u32 + 1,
-                    end_line: node.end_position().row as u32 + 1,
-                    end_column: node.end_position().column as u32 + 1,
-                    children: Vec::new(),
-                });
-            }
+            push_named_symbol(node, source, symbols, "static", "constant", Vec::new());
         }
-        "type_item" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node
-                    .utf8_text(source.as_bytes())
-                    .unwrap_or("")
-                    .to_string();
-                symbols.push(DocumentSymbol {
-                    name,
-                    detail: "type".to_string(),
-                    kind: "type".to_string(),
-                    start_line: node.start_position().row as u32 + 1,
-                    start_column: node.start_position().column as u32 + 1,
-                    end_line: node.end_position().row as u32 + 1,
-                    end_column: node.end_position().column as u32 + 1,
-                    children: Vec::new(),
-                });
-            }
+        "type_item" | "type_alias_declaration" => {
+            push_named_symbol(node, source, symbols, "type", "type", Vec::new());
         }
         "macro_definition" => {
-            if let Some(name_node) = node.child_by_field_name("name") {
-                let name = name_node
-                    .utf8_text(source.as_bytes())
-                    .unwrap_or("")
-                    .to_string();
-                symbols.push(DocumentSymbol {
-                    name,
-                    detail: "macro".to_string(),
-                    kind: "function".to_string(),
-                    start_line: node.start_position().row as u32 + 1,
-                    start_column: node.start_position().column as u32 + 1,
-                    end_line: node.end_position().row as u32 + 1,
-                    end_column: node.end_position().column as u32 + 1,
-                    children: Vec::new(),
-                });
-            }
+            push_named_symbol(node, source, symbols, "macro", "function", Vec::new());
         }
         "use_declaration" => {
             if let Some(name) = extract_use_name(node, source) {
-                symbols.push(DocumentSymbol {
-                    name,
-                    detail: "use".to_string(),
-                    kind: "module".to_string(),
-                    start_line: node.start_position().row as u32 + 1,
-                    start_column: node.start_position().column as u32 + 1,
-                    end_line: node.end_position().row as u32 + 1,
-                    end_column: node.end_position().column as u32 + 1,
-                    children: Vec::new(),
-                });
+                symbols.push(make_symbol(node, name, "use", "module", Vec::new()));
             }
         }
         _ => {}
@@ -226,6 +79,57 @@ fn traverse_for_symbols(node: &Node, source: &str, symbols: &mut Vec<DocumentSym
     if cursor.goto_first_child() {
         loop {
             traverse_for_symbols(&cursor.node(), source, symbols);
+            if !cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+fn make_symbol(
+    node: &Node,
+    name: String,
+    detail: &str,
+    kind: &str,
+    children: Vec<DocumentSymbol>,
+) -> DocumentSymbol {
+    DocumentSymbol {
+        name,
+        detail: detail.to_string(),
+        kind: kind.to_string(),
+        start_line: node.start_position().row as u32 + 1,
+        start_column: node.start_position().column as u32 + 1,
+        end_line: node.end_position().row as u32 + 1,
+        end_column: node.end_position().column as u32 + 1,
+        children,
+    }
+}
+
+fn push_named_symbol(
+    node: &Node,
+    source: &str,
+    symbols: &mut Vec<DocumentSymbol>,
+    detail: &str,
+    kind: &str,
+    children: Vec<DocumentSymbol>,
+) {
+    if let Some(name_node) = node.child_by_field_name("name") {
+        let name = name_node
+            .utf8_text(source.as_bytes())
+            .unwrap_or("")
+            .to_string();
+        symbols.push(make_symbol(node, name, detail, kind, children));
+    }
+}
+
+fn extract_variable_declaration_children(node: &Node, source: &str, symbols: &mut Vec<DocumentSymbol>) {
+    let mut cursor = node.walk();
+    if cursor.goto_first_child() {
+        loop {
+            let child = cursor.node();
+            if child.kind() == "variable_declarator" {
+                push_named_symbol(&child, source, symbols, "const", "constant", Vec::new());
+            }
             if !cursor.goto_next_sibling() {
                 break;
             }
@@ -372,5 +276,17 @@ enum Baz { A, B }
             .iter()
             .any(|s| s.name == "Bar" && s.kind == "struct"));
         assert!(symbols.iter().any(|s| s.name == "Baz" && s.kind == "enum"));
+    }
+
+    #[test]
+    fn extract_typescript_symbols() {
+        let source = "interface Point { x: number; y: number; }\nfunction main() { return 1; }\ntype Alias = Point;";
+        let mut parser = SyntaxParser::for_typescript().unwrap();
+        let parsed = parser.parse(source).unwrap();
+        let symbols = extract_document_symbols(&parsed.tree, source);
+
+        assert!(symbols.iter().any(|s| s.name == "Point" && s.kind == "interface"));
+        assert!(symbols.iter().any(|s| s.name == "main" && s.kind == "function"));
+        assert!(symbols.iter().any(|s| s.name == "Alias" && s.kind == "type"));
     }
 }
