@@ -12,12 +12,29 @@ import { computeLayout } from '../../wasm-glue.js';
 /**
  * Wraps a Monaco editor instance to intercept key APIs and
  * route compute-heavy operations to WASM.
+ *
+ * Upgrade safety: this shim only patches two public methods
+ * (`deltaDecorations`, `getLayoutInfo`) and stores originals
+ * so `dispose()` can restore them. No internal Monaco types
+ * or private properties are accessed. When Monaco upgrades,
+ * only these two method signatures need to remain stable.
  */
 export class MonacoCompatibilityShim {
   constructor(editor) {
     this.editor = editor;
     this.wasmDecorations = null;
     this.wasmLayout = null; // cached per-model layout from WASM
+    this._disposed = false;
+
+    // Guard against double-patching if constructor is called twice
+    if (editor.__wasmShimPatched) {
+      console.warn('[CompatibilityShim] Editor already patched; skipping');
+      this._originalDeltaDecorations = null;
+      this._originalGetLayoutInfo = null;
+      return;
+    }
+    editor.__wasmShimPatched = true;
+
     this._originalDeltaDecorations = editor.deltaDecorations.bind(editor);
     this._originalGetLayoutInfo = editor.getLayoutInfo.bind(editor);
 
@@ -143,11 +160,20 @@ export class MonacoCompatibilityShim {
   }
 
   /**
-   * Restore original Monaco APIs.
+   * Restore original Monaco APIs. Safe to call multiple times.
    */
   dispose() {
-    this.editor.deltaDecorations = this._originalDeltaDecorations;
-    this.editor.getLayoutInfo = this._originalGetLayoutInfo;
+    if (this._disposed) return;
+    this._disposed = true;
+
+    if (this._originalDeltaDecorations) {
+      this.editor.deltaDecorations = this._originalDeltaDecorations;
+    }
+    if (this._originalGetLayoutInfo) {
+      this.editor.getLayoutInfo = this._originalGetLayoutInfo;
+    }
+    delete this.editor.__wasmShimPatched;
+
     if (this.wasmDecorations) {
       this.wasmDecorations.dispose();
       this.wasmDecorations = null;

@@ -22,12 +22,23 @@ enum ResponseType {
   RESPONSE_TYPE_EVENT_FIRE = 5;
 }
 
+// Discriminator for the concrete payload type inside IpcRequest / IpcEvent.
+enum PayloadType {
+  PAYLOAD_TYPE_UNSPECIFIED = 0;
+  PAYLOAD_TYPE_BUFFER_EVENT = 1;
+  PAYLOAD_TYPE_FILE_EVENT = 2;
+  PAYLOAD_TYPE_LSP_EVENT = 3;
+  PAYLOAD_TYPE_DIAGNOSTIC_EVENT = 4;
+  PAYLOAD_TYPE_SYMBOL_INDEX = 5;
+}
+
 // Sent from TypeScript frontend to Rust backend
 message IpcRequest {
   uint32 id = 1;
   string channel_name = 2;
   string command_name = 3;
   RequestType request_type = 4;
+  PayloadType payload_type = 6;
   bytes payload = 5; // Protobuf-encoded command-specific message
 }
 
@@ -35,6 +46,7 @@ message IpcRequest {
 message IpcResponse {
   uint32 id = 1;
   ResponseType response_type = 2;
+  PayloadType payload_type = 6;
   bytes payload = 3; // Protobuf-encoded command-specific message
   string error_message = 4; // For PROMISE_ERROR
   string error_stack = 5;   // For PROMISE_ERROR
@@ -43,5 +55,6 @@ message IpcResponse {
 // Wrapper for event streaming: server pushes these without a prior request id
 message IpcEvent {
   uint32 subscription_id = 1;
+  PayloadType payload_type = 3;
   bytes payload = 2;
 }

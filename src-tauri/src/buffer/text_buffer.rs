@@ -1,6 +1,7 @@
 use crate::buffer::undo::{UndoEntry, UndoStack, UndoTransaction};
 use crate::buffer::{ContentChange, LineIndex, Position};
 use ropey::Rope;
+use std::sync::Arc;
 
 /// Events emitted by the text buffer when content changes.
 #[derive(Debug, Clone)]
@@ -84,6 +85,8 @@ pub struct TextBuffer {
     max_undo_size: usize,
     /// Dirty line ranges affected by the most recent edit (0-indexed).
     dirty_line_ranges: Vec<LineRange>,
+    /// Historical snapshots for lineage (bounded to last 50 versions).
+    history: Vec<BufferSnapshot>,
 }
 
 impl TextBuffer {
@@ -93,7 +96,7 @@ impl TextBuffer {
         let eol = Self::detect_eol(content);
         let line_index = LineIndex::new(content);
 
-        Self {
+        let mut buffer = Self {
             rope,
             resource,
             version_id: 1,
@@ -104,7 +107,12 @@ impl TextBuffer {
             undo_stack: UndoStack::new(),
             max_undo_size: 0, // unlimited
             dirty_line_ranges: Vec::new(),
-        }
+            history: Vec::new(),
+        };
+        // Store initial snapshot as version 1
+        let initial_snapshot = buffer.get_snapshot();
+        buffer.history.push(initial_snapshot);
+        buffer
     }
 
     /// Creates a new text buffer with custom undo stack size.
@@ -247,14 +255,36 @@ impl TextBuffer {
 
     /// Converts a position to a byte offset.
     pub fn position_to_offset(&self, position: Position) -> Option<usize> {
-        self.line_index
-            .position_to_offset(&self.rope.to_string(), position)
+        let line_start = self.line_index.line_start_offset(position.line)?;
+        let line_end = self.line_index.line_end_offset(position.line)
+            .unwrap_or(self.rope.len_bytes());
+        let line_text = self.rope.get_slice(line_start..line_end)?.to_string();
+        self.line_index.position_to_offset(&line_text, line_start, position)
     }
 
     /// Converts a byte offset to a position.
     pub fn offset_to_position(&self, offset: usize) -> Option<Position> {
-        self.line_index
-            .offset_to_position(&self.rope.to_string(), offset)
+        let line = self.line_index.offset_to_line(offset)?;
+        let line_start = self.line_index.line_start_offset(line)?;
+        let line_end = self.line_index.line_end_offset(line)
+            .unwrap_or(self.rope.len_bytes());
+        let line_text = self.rope.get_slice(line_start..line_end)?.to_string();
+        let bytes_into_line = offset - line_start;
+        let prefix = &line_text[..bytes_into_line.min(line_text.len())];
+        let column = prefix.encode_utf16().count() as u32 + 1;
+        Some(Position::new(line, column))
+    }
+
+    /// Incrementally update the line index after an edit at `edit_start_byte`.
+    fn update_line_index(&mut self, edit_start_byte: usize) {
+        let line = self.line_index.offset_to_line(edit_start_byte).unwrap_or(1);
+        let line_start = self.line_index.line_start_offset(line).unwrap_or(0);
+        let suffix = self
+            .rope
+            .get_slice(line_start..self.rope.len_bytes())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        self.line_index.update(&suffix, line_start);
     }
 
     /// Applies a single content change and returns the event.
@@ -294,6 +324,7 @@ impl TextBuffer {
         self.version_id += 1;
         self.alternative_version_id += 1;
         self.is_dirty = true;
+        self.record_snapshot();
 
         // Track dirty lines for incremental updates
         let start_line = change.start_position.line as usize - 1;
@@ -305,9 +336,8 @@ impl TextBuffer {
             end: affected_end.max(end_line + 1),
         });
 
-        // Rebuild line index
-        let content = self.rope.to_string();
-        self.line_index = LineIndex::new(&content);
+        // Update line index incrementally
+        self.update_line_index(start_offset);
 
         // Create and return the event
         let event = ModelContentChangedEvent::new(
@@ -358,6 +388,9 @@ impl TextBuffer {
                 }
             }
 
+            // Incrementally update line index after each change
+            self.update_line_index(start_offset);
+
             // Create undo entry
             let undo_entry = if old_text.is_empty() && !change.text.is_empty() {
                 UndoEntry::insert(change.clone())
@@ -381,6 +414,7 @@ impl TextBuffer {
         self.version_id += 1;
         self.alternative_version_id += 1;
         self.is_dirty = true;
+        self.record_snapshot();
 
         // Track dirty lines for incremental updates
         for change in &applied_changes {
@@ -393,10 +427,6 @@ impl TextBuffer {
                 end: affected_end.max(end_line + 1),
             });
         }
-
-        // Rebuild line index
-        let content = self.rope.to_string();
-        self.line_index = LineIndex::new(&content);
 
         let event =
             ModelContentChangedEvent::new(self.resource.clone(), self.version_id, applied_changes);
@@ -435,6 +465,7 @@ impl TextBuffer {
         self.version_id += 1;
         self.alternative_version_id += 1;
         self.is_dirty = true;
+        self.record_snapshot();
 
         // Rebuild line index
         self.line_index = LineIndex::new(new_content);
@@ -470,6 +501,7 @@ impl TextBuffer {
 
         self.version_id += 1;
         self.is_dirty = true;
+        self.record_snapshot();
 
         let event = ModelContentChangedEvent::new(self.resource.clone(), self.version_id, changes)
             .with_undoing(true);
@@ -495,6 +527,7 @@ impl TextBuffer {
 
         self.version_id += 1;
         self.is_dirty = true;
+        self.record_snapshot();
 
         let event = ModelContentChangedEvent::new(self.resource.clone(), self.version_id, changes)
             .with_redoing(true);
@@ -515,9 +548,8 @@ impl TextBuffer {
                 let _deleted_text = self.rope.get_slice(start_offset..end_offset)?.to_string();
                 self.rope.remove(start_offset..end_offset);
 
-                // Rebuild line index
-                let content = self.rope.to_string();
-                self.line_index = LineIndex::new(&content);
+                // Update line index incrementally
+                self.update_line_index(start_offset);
 
                 Some(ContentChange::delete(
                     position.start_position,
@@ -534,9 +566,8 @@ impl TextBuffer {
                 let start_offset = self.position_to_offset(position.start_position)?;
                 self.rope.insert(start_offset, deleted_text);
 
-                // Rebuild line index
-                let content = self.rope.to_string();
-                self.line_index = LineIndex::new(&content);
+                // Update line index incrementally
+                self.update_line_index(start_offset);
 
                 Some(ContentChange::insert(
                     position.start_position,
@@ -554,9 +585,8 @@ impl TextBuffer {
                     .remove(start_offset..start_offset + current_text.len());
                 self.rope.insert(start_offset, old_text);
 
-                // Rebuild line index
-                let content = self.rope.to_string();
-                self.line_index = LineIndex::new(&content);
+                // Update line index incrementally
+                self.update_line_index(start_offset);
 
                 Some(ContentChange::replace(
                     position.start_position,
@@ -577,9 +607,8 @@ impl TextBuffer {
                 let start_offset = self.position_to_offset(position.start_position)?;
                 self.rope.insert(start_offset, &position.text);
 
-                // Rebuild line index
-                let content = self.rope.to_string();
-                self.line_index = LineIndex::new(&content);
+                // Update line index incrementally
+                self.update_line_index(start_offset);
 
                 Some(ContentChange::insert(
                     position.start_position,
@@ -597,9 +626,8 @@ impl TextBuffer {
                 let deleted_text = self.rope.get_slice(start_offset..end_offset)?.to_string();
                 self.rope.remove(start_offset..end_offset);
 
-                // Rebuild line index
-                let content = self.rope.to_string();
-                self.line_index = LineIndex::new(&content);
+                // Update line index incrementally
+                self.update_line_index(start_offset);
 
                 Some(ContentChange::delete(
                     position.start_position,
@@ -616,9 +644,8 @@ impl TextBuffer {
                 self.rope.remove(start_offset..start_offset + old_text_len);
                 self.rope.insert(start_offset, &position.text);
 
-                // Rebuild line index
-                let content = self.rope.to_string();
-                self.line_index = LineIndex::new(&content);
+                // Update line index incrementally
+                self.update_line_index(start_offset);
 
                 Some(ContentChange::replace(
                     position.start_position,
@@ -656,10 +683,37 @@ impl TextBuffer {
         BufferSnapshot {
             resource: self.resource.clone(),
             version_id: self.version_id,
-            content_utf8: self.get_value_bytes(),
+            content_utf8: Arc::new(self.get_value_bytes()),
             eol: self.eol.clone(),
             is_dirty: self.is_dirty,
         }
+    }
+
+    /// Gets a snapshot wrapped in an `Arc` for cheap sharing.
+    pub fn get_snapshot_arc(&self) -> Arc<BufferSnapshot> {
+        Arc::new(self.get_snapshot())
+    }
+
+    /// Records the current snapshot into the bounded history.
+    pub fn record_snapshot(&mut self) {
+        const MAX_HISTORY: usize = 50;
+        if self.history.len() >= MAX_HISTORY {
+            self.history.remove(0);
+        }
+        self.history.push(self.get_snapshot());
+    }
+
+    /// Returns the version lineage (historical snapshots).
+    pub fn get_lineage(&self) -> &Vec<BufferSnapshot> {
+        &self.history
+    }
+
+    /// Returns the snapshot closest to the requested version_id.
+    pub fn get_snapshot_at_version(&self, version_id: u64) -> Option<&BufferSnapshot> {
+        if version_id == 0 {
+            return self.history.last();
+        }
+        self.history.iter().find(|s| s.version_id == version_id)
     }
 }
 
@@ -668,7 +722,7 @@ impl TextBuffer {
 pub struct BufferSnapshot {
     pub resource: String,
     pub version_id: u64,
-    pub content_utf8: Vec<u8>,
+    pub content_utf8: Arc<Vec<u8>>,
     pub eol: String,
     pub is_dirty: bool,
 }
@@ -809,7 +863,7 @@ mod tests {
         buffer.apply_change(&change);
 
         let snapshot = buffer.get_snapshot();
-        assert_eq!(snapshot.content_utf8, b"content!");
+        assert_eq!(snapshot.content_utf8.as_ref(), b"content!");
         assert_eq!(snapshot.version_id, 2);
         assert!(snapshot.is_dirty);
     }

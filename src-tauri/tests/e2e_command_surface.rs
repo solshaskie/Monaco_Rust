@@ -29,7 +29,10 @@ fn e2e_workspace_roots() {
 
 #[test]
 fn e2e_open_document_lifecycle() {
-    let temp_dir = std::env::temp_dir().join("monaco-e2e-open");
+    let temp_dir = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join("test-temp-e2e-open");
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -119,16 +122,23 @@ fn e2e_open_document_lifecycle() {
 
 #[test]
 fn e2e_list_directory() {
-    let temp_dir = std::env::temp_dir().join("monaco-e2e-list");
+    let temp_dir = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join("test-temp-e2e-list");
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
     fs::write(temp_dir.join("a.rs"), "").unwrap();
     fs::write(temp_dir.join("b.rs"), "").unwrap();
 
-    let listing = host_handlers::list_directory(host::ListDirectoryRequest {
-        resource: Some(file_uri(&temp_dir)),
-        include_file_stats: true,
-    })
+    let state = MonacoHostState::new();
+    let listing = host_handlers::list_directory(
+        &state,
+        host::ListDirectoryRequest {
+            resource: Some(file_uri(&temp_dir)),
+            include_file_stats: true,
+        },
+    )
     .unwrap();
 
     let names: Vec<String> = listing.entries.iter().map(|e| e.name.clone()).collect();
@@ -140,7 +150,10 @@ fn e2e_list_directory() {
 
 #[test]
 fn e2e_undo_redo() {
-    let temp_dir = std::env::temp_dir().join("monaco-e2e-undo");
+    let temp_dir = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join("test-temp-e2e-undo");
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
 

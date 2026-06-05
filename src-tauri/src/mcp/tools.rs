@@ -9,9 +9,10 @@ use crate::syntax::{extract_document_symbols, SyntaxParser};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct McpToolResult {
     pub success: bool,
+    pub status: McpStatus,
     pub content: String,
     pub version_id: u64,
-    pub error: Option<String>,
+    pub error: Option<McpError>,
     pub certainty: Option<McpCertainty>,
     pub provenance: Option<McpResultProvenance>,
     pub evidence: Option<serde_json::Value>,
@@ -40,6 +41,7 @@ impl McpToolResult {
     pub fn ok(content: impl Into<String>, version_id: u64) -> Self {
         Self {
             success: true,
+            status: McpStatus::Ok,
             content: content.into(),
             version_id,
             error: None,
@@ -50,12 +52,13 @@ impl McpToolResult {
         }
     }
 
-    pub fn err(message: impl Into<String>) -> Self {
+    pub fn err(error: McpError) -> Self {
         Self {
             success: false,
+            status: McpStatus::Unavailable,
             content: String::new(),
             version_id: 0,
-            error: Some(message.into()),
+            error: Some(error),
             certainty: Some(McpCertainty::Unknown),
             provenance: None,
             evidence: None,
@@ -78,28 +81,101 @@ impl McpToolResult {
     }
 }
 
-/// Errors that can occur during MCP tool execution.
-#[derive(Debug, Clone, PartialEq)]
-pub enum McpToolError {
-    BufferNotFound(String),
-    VersionConflict { expected: u64, actual: u64 },
-    InvalidEdit(String),
-    SerializationError(String),
+/// Status of an MCP tool result.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpStatus {
+    Ok,
+    Partial,
+    Unavailable,
 }
 
-impl std::fmt::Display for McpToolError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            McpToolError::BufferNotFound(r) => write!(f, "Buffer not found: {}", r),
-            McpToolError::VersionConflict { expected, actual } => {
-                write!(
-                    f,
-                    "Version conflict: expected {} but found {}",
-                    expected, actual
-                )
-            }
-            McpToolError::InvalidEdit(msg) => write!(f, "Invalid edit: {}", msg),
-            McpToolError::SerializationError(msg) => write!(f, "Serialization error: {}", msg),
+/// The kind of error that occurred during MCP tool execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpErrorKind {
+    BufferNotFound,
+    VersionConflict,
+    InvalidEdit,
+    PermissionDenied,
+    PathOutOfWorkspace,
+    SerializationError,
+    Generic,
+}
+
+/// Structured error returned by MCP tools.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpError {
+    pub kind: McpErrorKind,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+impl McpError {
+    pub fn buffer_not_found(path: impl Into<String>) -> Self {
+        let path = path.into();
+        Self {
+            kind: McpErrorKind::BufferNotFound,
+            message: format!("Buffer not found: {}", path),
+            expected_version: None,
+            actual_version: None,
+            path: Some(path),
+        }
+    }
+
+    pub fn version_conflict(expected: u64, actual: u64, path: Option<String>) -> Self {
+        Self {
+            kind: McpErrorKind::VersionConflict,
+            message: format!("Version conflict: expected {} but found {}", expected, actual),
+            expected_version: Some(expected),
+            actual_version: Some(actual),
+            path,
+        }
+    }
+
+    pub fn invalid_edit(msg: impl Into<String>) -> Self {
+        Self {
+            kind: McpErrorKind::InvalidEdit,
+            message: msg.into(),
+            expected_version: None,
+            actual_version: None,
+            path: None,
+        }
+    }
+
+    pub fn permission_denied(msg: impl Into<String>) -> Self {
+        Self {
+            kind: McpErrorKind::PermissionDenied,
+            message: msg.into(),
+            expected_version: None,
+            actual_version: None,
+            path: None,
+        }
+    }
+
+    pub fn path_out_of_workspace(path: impl Into<String>) -> Self {
+        let path = path.into();
+        Self {
+            kind: McpErrorKind::PathOutOfWorkspace,
+            message: format!("Path out of workspace: {}", path),
+            expected_version: None,
+            actual_version: None,
+            path: Some(path),
+        }
+    }
+
+    pub fn serialization(msg: impl Into<String>) -> Self {
+        Self {
+            kind: McpErrorKind::SerializationError,
+            message: msg.into(),
+            expected_version: None,
+            actual_version: None,
+            path: None,
         }
     }
 }
@@ -160,6 +236,14 @@ impl McpToolRegistry {
         registry.register(Box::new(GetSymbolIndexTool));
         registry.register(Box::new(GetSymbolAtPositionTool));
         registry.register(Box::new(GetBufferVersionLineageTool));
+        registry.register(Box::new(CompareBufferVersionsTool));
+        registry.register(Box::new(InspectBufferDriftTool));
+        registry.register(Box::new(ListOpenBuffersTool));
+        registry.register(Box::new(ReplayBufferTool));
+        registry.register(Box::new(GetBufferByteRangeTool));
+        registry.register(Box::new(SearchTextInBuffersTool));
+        registry.register(Box::new(QuerySymbolsTool));
+        registry.register(Box::new(DiffFilesTool));
         registry
     }
 }
@@ -271,7 +355,7 @@ impl McpTool for ReadFileTool {
 
         let args: Args = match serde_json::from_str(args) {
             Ok(a) => a,
-            Err(e) => return McpToolResult::err(format!("Invalid arguments: {}", e)),
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
         };
 
         let version_id = registry.get_buffer_version(&args.path).unwrap_or(0);
@@ -305,7 +389,7 @@ impl McpTool for ReadFileTool {
                     })),
                 )
             }
-            None => McpToolResult::err(format!("Buffer not found: {}", args.path)),
+            None => McpToolResult::err(McpError::buffer_not_found(&args.path)),
         }
     }
 }
@@ -350,21 +434,21 @@ impl McpTool for EditFileTool {
 
         let args: Args = match serde_json::from_str(args) {
             Ok(a) => a,
-            Err(e) => return McpToolResult::err(format!("Invalid arguments: {}", e)),
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
         };
 
         let content = match registry.get_buffer_content(&args.path) {
             Some(c) => c,
-            None => return McpToolResult::err(format!("Buffer not found: {}", args.path)),
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
         };
 
         let start_offset = match content.find(&args.old_text) {
             Some(o) => o,
             None => {
-                return McpToolResult::err(format!(
+                return McpToolResult::err(McpError::invalid_edit(format!(
                     "old_text not found in file. Expected: {:?}",
                     args.old_text
-                ))
+                )))
             }
         };
 
@@ -383,7 +467,17 @@ impl McpTool for EditFileTool {
         let result = if let Some(expected) = args.expected_version {
             match registry.apply_edit_optimistic(&args.path, &change, expected) {
                 Ok(event) => event,
-                Err(e) => return McpToolResult::err(e),
+                Err(e) => {
+                    if e.contains("version conflict") {
+                        let actual = registry.get_buffer_version(&args.path).unwrap_or(0);
+                        return McpToolResult::err(McpError::version_conflict(
+                            expected,
+                            actual,
+                            Some(args.path.clone()),
+                        ));
+                    }
+                    return McpToolResult::err(McpError::buffer_not_found(&args.path));
+                }
             }
         } else {
             registry.apply_edit(&args.path, &change)
@@ -406,7 +500,7 @@ impl McpTool for EditFileTool {
                         "version_id": event.version_id,
                     })),
                 ),
-            None => McpToolResult::err("Edit had no effect"),
+            None => McpToolResult::err(McpError::invalid_edit("Edit had no effect")),
         }
     }
 }
@@ -445,14 +539,14 @@ impl McpTool for ListSymbolsTool {
 
         let args: Args = match serde_json::from_str(args) {
             Ok(a) => a,
-            Err(e) => return McpToolResult::err(format!("Invalid arguments: {}", e)),
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
         };
 
         let version_id = registry.get_buffer_version(&args.path).unwrap_or(0);
 
         let content = match registry.get_buffer_content(&args.path) {
             Some(c) => c,
-            None => return McpToolResult::err(format!("Buffer not found: {}", args.path)),
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
         };
 
         // Simple regex-free symbol extraction using basic heuristics
@@ -588,19 +682,20 @@ impl McpTool for ApplyEditsTool {
 
         let args: Args = match serde_json::from_str(args) {
             Ok(a) => a,
-            Err(e) => return McpToolResult::err(format!("Invalid arguments: {}", e)),
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
         };
 
         // Validate version first if requested
         if let Some(expected) = args.expected_version {
             let version = match registry.get_buffer_version(&args.path) {
                 Some(v) => v,
-                None => return McpToolResult::err(format!("Buffer not found: {}", args.path)),
+                None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
             };
             if version != expected {
-                return McpToolResult::err(format!(
-                    "version conflict: expected {} but found {}",
-                    expected, version
+                return McpToolResult::err(McpError::version_conflict(
+                    expected,
+                    version,
+                    Some(args.path.clone()),
                 ));
             }
         }
@@ -624,11 +719,11 @@ impl McpTool for ApplyEditsTool {
                     applied += 1;
                 }
                 None => {
-                    return McpToolResult::err(format!(
+                    return McpToolResult::err(McpError::invalid_edit(format!(
                         "Edit {} of {} had no effect",
                         applied + 1,
                         total_edits
-                    ));
+                    )));
                 }
             }
         }
@@ -688,22 +783,22 @@ impl McpTool for GetBufferMetadataTool {
 
         let args: Args = match serde_json::from_str(args) {
             Ok(a) => a,
-            Err(e) => return McpToolResult::err(format!("Invalid arguments: {}", e)),
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
         };
 
         let version_id = match registry.get_buffer_version(&args.path) {
             Some(value) => value,
-            None => return McpToolResult::err(format!("Buffer not found: {}", args.path)),
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
         };
 
         let bytes = match registry.get_buffer_content_bytes(&args.path) {
             Some(value) => value,
-            None => return McpToolResult::err(format!("Buffer not found: {}", args.path)),
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
         };
 
         let content = match registry.get_buffer_content(&args.path) {
             Some(value) => value,
-            None => return McpToolResult::err(format!("Buffer not found: {}", args.path)),
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
         };
 
         let dirty = registry.is_buffer_dirty(&args.path).unwrap_or(false);
@@ -771,24 +866,24 @@ impl McpTool for GetBufferSnapshotProofTool {
 
         let args: Args = match serde_json::from_str(args) {
             Ok(a) => a,
-            Err(e) => return McpToolResult::err(format!("Invalid arguments: {}", e)),
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
         };
 
         let snapshot = match registry.get_buffer_snapshot(&args.path) {
             Some(value) => value,
-            None => return McpToolResult::err(format!("Buffer not found: {}", args.path)),
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
         };
 
-        let content = match String::from_utf8(snapshot.content_utf8.clone()) {
+        let content = match String::from_utf8((&*snapshot.content_utf8).to_vec()) {
             Ok(value) => value,
             Err(e) => {
-                return McpToolResult::err(format!("Buffer content is not valid UTF-8: {}", e))
+                return McpToolResult::err(McpError::invalid_edit(format!("Buffer content is not valid UTF-8: {}", e)))
             }
         };
 
         let include_content = args.include_content.unwrap_or(true);
         let line_count = content.lines().count();
-        let content_sha256 = sha256_hex(&snapshot.content_utf8);
+        let content_sha256 = sha256_hex(&*snapshot.content_utf8);
 
         let evidence = serde_json::json!({
             "path": snapshot.resource,
@@ -857,22 +952,22 @@ impl McpTool for GetSymbolIndexTool {
 
         let args: Args = match serde_json::from_str(args) {
             Ok(a) => a,
-            Err(e) => return McpToolResult::err(format!("Invalid arguments: {}", e)),
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
         };
 
         let content = match registry.get_buffer_content(&args.path) {
             Some(value) => value,
-            None => return McpToolResult::err(format!("Buffer not found: {}", args.path)),
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
         };
 
         let version_id = registry.get_buffer_version(&args.path).unwrap_or(0);
         let mut parser = match parser_for_path(&args.path) {
             Ok(value) => value,
-            Err(e) => return McpToolResult::err(format!("Parser selection failed: {}", e)),
+            Err(e) => return McpToolResult::err(McpError::invalid_edit(format!("Parser selection failed: {}", e))),
         };
         let parsed = match parser.parse(&content) {
             Ok(value) => value,
-            Err(e) => return McpToolResult::err(format!("Parse failed: {}", e)),
+            Err(e) => return McpToolResult::err(McpError::invalid_edit(format!("Parse failed: {}", e))),
         };
 
         let symbols = extract_document_symbols(&parsed.tree, &content);
@@ -934,32 +1029,32 @@ impl McpTool for GetSymbolAtPositionTool {
 
         let args: Args = match serde_json::from_str(args) {
             Ok(a) => a,
-            Err(e) => return McpToolResult::err(format!("Invalid arguments: {}", e)),
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
         };
 
         let content = match registry.get_buffer_content(&args.path) {
             Some(value) => value,
-            None => return McpToolResult::err(format!("Buffer not found: {}", args.path)),
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
         };
 
         let version_id = registry.get_buffer_version(&args.path).unwrap_or(0);
         let mut parser = match parser_for_path(&args.path) {
             Ok(value) => value,
-            Err(e) => return McpToolResult::err(format!("Parser selection failed: {}", e)),
+            Err(e) => return McpToolResult::err(McpError::invalid_edit(format!("Parser selection failed: {}", e))),
         };
         let parsed = match parser.parse(&content) {
             Ok(value) => value,
-            Err(e) => return McpToolResult::err(format!("Parse failed: {}", e)),
+            Err(e) => return McpToolResult::err(McpError::invalid_edit(format!("Parse failed: {}", e))),
         };
 
         let symbols = extract_document_symbols(&parsed.tree, &content);
         let symbol = match find_symbol_at_position(&symbols, args.line, args.column) {
             Some(value) => value,
             None => {
-                return McpToolResult::err(format!(
+                return McpToolResult::err(McpError::invalid_edit(format!(
                     "No symbol found at {}:{} in {}",
                     args.line, args.column, args.path
-                ))
+                )))
             }
         };
 
@@ -1017,21 +1112,23 @@ impl McpTool for GetBufferVersionLineageTool {
 
         let args: Args = match serde_json::from_str(args) {
             Ok(a) => a,
-            Err(e) => return McpToolResult::err(format!("Invalid arguments: {}", e)),
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
         };
 
         let version_id = match registry.get_buffer_version(&args.path) {
             Some(value) => value,
-            None => return McpToolResult::err(format!("Buffer not found: {}", args.path)),
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
         };
         let bytes = match registry.get_buffer_content_bytes(&args.path) {
             Some(value) => value,
-            None => return McpToolResult::err(format!("Buffer not found: {}", args.path)),
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
         };
 
         let dirty = registry.is_buffer_dirty(&args.path).unwrap_or(false);
         let can_undo = registry.can_undo(&args.path).unwrap_or(false);
         let can_redo = registry.can_redo(&args.path).unwrap_or(false);
+        let lineage = registry.get_buffer_lineage(&args.path).unwrap_or_default();
+        let historical_versions: Vec<u64> = lineage.iter().map(|s| s.version_id).collect();
 
         let data = serde_json::json!({
             "path": args.path,
@@ -1040,10 +1137,12 @@ impl McpTool for GetBufferVersionLineageTool {
             "is_dirty": dirty,
             "can_undo": can_undo,
             "can_redo": can_redo,
-            "lineage_model": "monotonic_version_counter",
+            "lineage_model": "bounded_snapshot_history",
+            "historical_version_count": historical_versions.len(),
+            "historical_versions": historical_versions,
             "lineage_capabilities": {
-                "historical_versions_stored": false,
-                "exact_prior_diff_reconstructable": false,
+                "historical_versions_stored": true,
+                "exact_prior_diff_reconstructable": true,
                 "snapshot_proof_available_for_current_version": true,
                 "undo_redo_affordance_available": true,
             },
@@ -1056,6 +1155,883 @@ impl McpTool for GetBufferVersionLineageTool {
                 Some(&args.path),
                 Some(version_id),
             ),
+            data.clone(),
+            Some(data),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool: compare_buffer_versions
+// ---------------------------------------------------------------------------
+
+struct CompareBufferVersionsTool;
+
+impl McpTool for CompareBufferVersionsTool {
+    fn name(&self) -> &str {
+        "compare_buffer_versions"
+    }
+
+    fn description(&self) -> &str {
+        "Return an exact line-level diff between two historical buffer versions."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Absolute file path" },
+                "from_version": { "type": "integer", "description": "Source version ID" },
+                "to_version": { "type": "integer", "description": "Target version ID" }
+            },
+            "required": ["path", "from_version", "to_version"]
+        })
+    }
+
+    fn execute(&self, registry: &BufferRegistry, args: &str) -> McpToolResult {
+        #[derive(Deserialize)]
+        struct Args {
+            path: String,
+            from_version: u64,
+            to_version: u64,
+        }
+
+        let args: Args = match serde_json::from_str(args) {
+            Ok(a) => a,
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
+        };
+
+        let from_snapshot = match registry.get_buffer_snapshot_at_version(&args.path, args.from_version) {
+            Some(s) => s,
+            None => return McpToolResult::err(McpError::invalid_edit(format!(
+                "Version {} not found in lineage for {}", args.from_version, args.path
+            ))),
+        };
+        let to_snapshot = match registry.get_buffer_snapshot_at_version(&args.path, args.to_version) {
+            Some(s) => s,
+            None => return McpToolResult::err(McpError::invalid_edit(format!(
+                "Version {} not found in lineage for {}", args.to_version, args.path
+            ))),
+        };
+
+        let from_text = String::from_utf8_lossy(&from_snapshot.content_utf8);
+        let to_text = String::from_utf8_lossy(&to_snapshot.content_utf8);
+        let diff = compute_line_diff(&from_text, &to_text);
+
+        let data = serde_json::json!({
+            "path": args.path,
+            "from_version": args.from_version,
+            "to_version": args.to_version,
+            "from_sha256": sha256_hex(&from_snapshot.content_utf8),
+            "to_sha256": sha256_hex(&to_snapshot.content_utf8),
+            "lines_added": diff.lines_added,
+            "lines_removed": diff.lines_removed,
+            "lines_changed": diff.lines_changed,
+            "diff_chunks": diff.chunks,
+        });
+
+        McpToolResult::ok("Computed version diff", to_snapshot.version_id).with_truth(
+            McpCertainty::Observed,
+            make_provenance("compare_buffer_versions", Some(&args.path), Some(to_snapshot.version_id)),
+            data.clone(),
+            Some(data),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct LineDiffResult {
+    lines_added: usize,
+    lines_removed: usize,
+    lines_changed: usize,
+    chunks: Vec<DiffChunk>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct DiffChunk {
+    kind: DiffChunkKind,
+    old_start: usize,
+    new_start: usize,
+    lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum DiffChunkKind {
+    Equal,
+    Added,
+    Removed,
+    Changed,
+}
+
+fn compute_line_diff(old_text: &str, new_text: &str) -> LineDiffResult {
+    let old_lines: Vec<&str> = old_text.lines().collect();
+    let new_lines: Vec<&str> = new_text.lines().collect();
+
+    let mut chunks = Vec::new();
+    let mut lines_added = 0usize;
+    let mut lines_removed = 0usize;
+    let mut lines_changed = 0usize;
+
+    let max_len = old_lines.len().max(new_lines.len());
+    let mut i = 0;
+
+    while i < max_len {
+        let old_line = old_lines.get(i);
+        let new_line = new_lines.get(i);
+
+        match (old_line, new_line) {
+            (Some(o), Some(n)) if o == n => {
+                chunks.push(DiffChunk {
+                    kind: DiffChunkKind::Equal,
+                    old_start: i + 1,
+                    new_start: i + 1,
+                    lines: vec![o.to_string()],
+                });
+            }
+            (Some(o), Some(n)) => {
+                lines_changed += 1;
+                chunks.push(DiffChunk {
+                    kind: DiffChunkKind::Changed,
+                    old_start: i + 1,
+                    new_start: i + 1,
+                    lines: vec![format!("- {}", o), format!("+ {}", n)],
+                });
+            }
+            (None, Some(n)) => {
+                lines_added += 1;
+                chunks.push(DiffChunk {
+                    kind: DiffChunkKind::Added,
+                    old_start: i + 1,
+                    new_start: i + 1,
+                    lines: vec![format!("+ {}", n)],
+                });
+            }
+            (Some(o), None) => {
+                lines_removed += 1;
+                chunks.push(DiffChunk {
+                    kind: DiffChunkKind::Removed,
+                    old_start: i + 1,
+                    new_start: i + 1,
+                    lines: vec![format!("- {}", o)],
+                });
+            }
+            (None, None) => break,
+        }
+        i += 1;
+    }
+
+    LineDiffResult {
+        lines_added,
+        lines_removed,
+        lines_changed,
+        chunks,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool: inspect_buffer_drift
+// ---------------------------------------------------------------------------
+
+struct InspectBufferDriftTool;
+
+impl McpTool for InspectBufferDriftTool {
+    fn name(&self) -> &str {
+        "inspect_buffer_drift"
+    }
+
+    fn description(&self) -> &str {
+        "Compare the current in-memory buffer against the file on disk and report drift."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Absolute file path" }
+            },
+            "required": ["path"]
+        })
+    }
+
+    fn execute(&self, registry: &BufferRegistry, args: &str) -> McpToolResult {
+        #[derive(Deserialize)]
+        struct Args {
+            path: String,
+        }
+
+        let args: Args = match serde_json::from_str(args) {
+            Ok(a) => a,
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
+        };
+
+        let version_id = match registry.get_buffer_version(&args.path) {
+            Some(v) => v,
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
+        };
+
+        let buffer_bytes = match registry.get_buffer_content_bytes(&args.path) {
+            Some(b) => b,
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
+        };
+
+        let disk_bytes = match std::fs::read(&args.path) {
+            Ok(b) => b,
+            Err(e) => return McpToolResult::err(McpError::invalid_edit(format!(
+                "Failed to read file from disk: {}", e
+            ))),
+        };
+
+        let buffer_sha256 = sha256_hex(&buffer_bytes);
+        let disk_sha256 = sha256_hex(&disk_bytes);
+        let has_drift = buffer_sha256 != disk_sha256;
+
+        let buffer_text = String::from_utf8_lossy(&buffer_bytes);
+        let disk_text = String::from_utf8_lossy(&disk_bytes);
+        let diff = if has_drift {
+            Some(compute_line_diff(&disk_text, &buffer_text))
+        } else {
+            None
+        };
+
+        let data = serde_json::json!({
+            "path": args.path,
+            "version_id": version_id,
+            "has_drift": has_drift,
+            "buffer_sha256": buffer_sha256,
+            "disk_sha256": disk_sha256,
+            "buffer_byte_len": buffer_bytes.len(),
+            "disk_byte_len": disk_bytes.len(),
+            "diff": diff.as_ref().map(|d| serde_json::json!({
+                "lines_added": d.lines_added,
+                "lines_removed": d.lines_removed,
+                "lines_changed": d.lines_changed,
+                "chunks": d.chunks,
+            })),
+        });
+
+        McpToolResult::ok(
+            if has_drift { "Buffer has drift from disk" } else { "Buffer matches disk" },
+            version_id,
+        )
+        .with_truth(
+            McpCertainty::Observed,
+            make_provenance("inspect_buffer_drift", Some(&args.path), Some(version_id)),
+            data.clone(),
+            Some(data),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool: list_open_buffers
+// ---------------------------------------------------------------------------
+
+struct ListOpenBuffersTool;
+
+impl McpTool for ListOpenBuffersTool {
+    fn name(&self) -> &str {
+        "list_open_buffers"
+    }
+
+    fn description(&self) -> &str {
+        "List all open buffers with runtime metadata (version, dirty, undo/redo)."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })
+    }
+
+    fn execute(&self, registry: &BufferRegistry, _args: &str) -> McpToolResult {
+        let resources = registry.open_resources();
+        let mut buffers = Vec::with_capacity(resources.len());
+
+        for path in &resources {
+            let version_id = registry.get_buffer_version(path).unwrap_or(0);
+            let is_dirty = registry.is_buffer_dirty(path).unwrap_or(false);
+            let can_undo = registry.can_undo(path).unwrap_or(false);
+            let can_redo = registry.can_redo(path).unwrap_or(false);
+            let byte_len = registry
+                .get_buffer_content_bytes(path)
+                .map(|b| b.len())
+                .unwrap_or(0);
+            let line_count = registry
+                .get_buffer_content(path)
+                .map(|c| c.lines().count())
+                .unwrap_or(0);
+
+            buffers.push(serde_json::json!({
+                "path": path,
+                "version_id": version_id,
+                "is_dirty": is_dirty,
+                "can_undo": can_undo,
+                "can_redo": can_redo,
+                "byte_len": byte_len,
+                "line_count": line_count,
+            }));
+        }
+
+        let data = serde_json::json!({
+            "count": buffers.len(),
+            "buffers": buffers,
+        });
+
+        McpToolResult::ok("Listed open buffers", 0).with_truth(
+            McpCertainty::Observed,
+            make_provenance("list_open_buffers", None, None),
+            data.clone(),
+            Some(data),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool: replay_buffer
+// ---------------------------------------------------------------------------
+
+struct ReplayBufferTool;
+
+impl McpTool for ReplayBufferTool {
+    fn name(&self) -> &str {
+        "replay_buffer"
+    }
+
+    fn description(&self) -> &str {
+        "Return the exact content of a buffer at a historical version_id."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Absolute file path" },
+                "version_id": { "type": "integer", "description": "Historical version ID to replay" }
+            },
+            "required": ["path", "version_id"]
+        })
+    }
+
+    fn execute(&self, registry: &BufferRegistry, args: &str) -> McpToolResult {
+        #[derive(Deserialize)]
+        struct Args {
+            path: String,
+            version_id: u64,
+        }
+
+        let args: Args = match serde_json::from_str(args) {
+            Ok(a) => a,
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
+        };
+
+        let snapshot = match registry.get_buffer_snapshot_at_version(&args.path, args.version_id) {
+            Some(s) => s,
+            None => return McpToolResult::err(McpError::invalid_edit(format!(
+                "Version {} not found in lineage for {}", args.version_id, args.path
+            ))),
+        };
+
+        let content = String::from_utf8_lossy(&snapshot.content_utf8);
+        let data = serde_json::json!({
+            "path": args.path,
+            "version_id": snapshot.version_id,
+            "content": content.as_ref(),
+            "content_sha256": sha256_hex(&snapshot.content_utf8),
+            "byte_len": snapshot.content_utf8.len(),
+            "is_dirty": snapshot.is_dirty,
+        });
+
+        McpToolResult::ok("Replayed buffer at historical version", snapshot.version_id).with_truth(
+            McpCertainty::Observed,
+            make_provenance("replay_buffer", Some(&args.path), Some(snapshot.version_id)),
+            data.clone(),
+            Some(data),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool: get_buffer_byte_range
+// ---------------------------------------------------------------------------
+
+struct GetBufferByteRangeTool;
+
+impl McpTool for GetBufferByteRangeTool {
+    fn name(&self) -> &str {
+        "get_buffer_byte_range"
+    }
+
+    fn description(&self) -> &str {
+        "Return an exact byte slice from a buffer via O(1) Arc snapshot read."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Absolute file path" },
+                "offset": { "type": "integer", "description": "Byte offset (0-indexed)" },
+                "length": { "type": "integer", "description": "Number of bytes to read" }
+            },
+            "required": ["path", "offset", "length"]
+        })
+    }
+
+    fn execute(&self, registry: &BufferRegistry, args: &str) -> McpToolResult {
+        #[derive(Deserialize)]
+        struct Args {
+            path: String,
+            offset: usize,
+            length: usize,
+        }
+
+        let args: Args = match serde_json::from_str(args) {
+            Ok(a) => a,
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
+        };
+
+        let version_id = match registry.get_buffer_version(&args.path) {
+            Some(v) => v,
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
+        };
+
+        let snapshot = match registry.get_buffer_snapshot(&args.path) {
+            Some(s) => s,
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.path)),
+        };
+
+        let bytes = snapshot.content_utf8.as_ref();
+        let total = bytes.len();
+
+        if args.offset > total {
+            return McpToolResult::err(McpError::invalid_edit(format!(
+                "Offset {} exceeds buffer length {}", args.offset, total
+            )));
+        }
+
+        let end = (args.offset + args.length).min(total);
+        let slice = &bytes[args.offset..end];
+        let slice_str = String::from_utf8_lossy(slice);
+
+        let data = serde_json::json!({
+            "path": args.path,
+            "version_id": version_id,
+            "offset": args.offset,
+            "requested_length": args.length,
+            "actual_length": slice.len(),
+            "total_length": total,
+            "content": slice_str.as_ref(),
+            "content_sha256": sha256_hex(slice),
+        });
+
+        McpToolResult::ok("Retrieved byte range", version_id).with_truth(
+            McpCertainty::Observed,
+            make_provenance("get_buffer_byte_range", Some(&args.path), Some(version_id)),
+            data.clone(),
+            Some(data),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tool: search_text_in_buffers
+// ---------------------------------------------------------------------------
+
+struct SearchTextInBuffersTool;
+
+impl McpTool for SearchTextInBuffersTool {
+    fn name(&self) -> &str {
+        "search_text_in_buffers"
+    }
+
+    fn description(&self) -> &str {
+        "Search for a text pattern across all open buffers. Returns matches with line/column and SHA-256."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "Text to search for" },
+                "case_sensitive": { "type": "boolean", "description": "Whether the search is case-sensitive", "default": true }
+            },
+            "required": ["query"]
+        })
+    }
+
+    fn execute(&self, registry: &BufferRegistry, args: &str) -> McpToolResult {
+        #[derive(Deserialize)]
+        struct Args {
+            query: String,
+            #[serde(default = "default_true")]
+            case_sensitive: bool,
+        }
+
+        let args: Args = match serde_json::from_str(args) {
+            Ok(a) => a,
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
+        };
+
+        let resources = registry.open_resources();
+        let mut all_matches = Vec::new();
+        let mut total_matches = 0usize;
+
+        for path in &resources {
+            let content = match registry.get_buffer_content(path) {
+                Some(c) => c,
+                None => continue,
+            };
+            let version_id = registry.get_buffer_version(path).unwrap_or(0);
+            let bytes = match registry.get_buffer_content_bytes(path) {
+                Some(b) => b,
+                None => continue,
+            };
+
+            let matches = find_text_matches(&content, &args.query, args.case_sensitive);
+            total_matches += matches.len();
+
+            let match_objects: Vec<serde_json::Value> = matches
+                .into_iter()
+                .map(|m| {
+                    let match_bytes = content[m.byte_offset..m.byte_offset + m.byte_length].as_bytes();
+                    serde_json::json!({
+                        "line": m.line,
+                        "column": m.column,
+                        "byte_offset": m.byte_offset,
+                        "byte_length": m.byte_length,
+                        "match_text": m.text,
+                        "match_sha256": sha256_hex(match_bytes),
+                    })
+                })
+                .collect();
+
+            if !match_objects.is_empty() {
+                all_matches.push(serde_json::json!({
+                    "path": path,
+                    "version_id": version_id,
+                    "buffer_sha256": sha256_hex(&bytes),
+                    "match_count": match_objects.len(),
+                    "matches": match_objects,
+                }));
+            }
+        }
+
+        let data = serde_json::json!({
+            "query": args.query,
+            "case_sensitive": args.case_sensitive,
+            "total_matches": total_matches,
+            "buffers_searched": resources.len(),
+            "buffers_with_matches": all_matches.len(),
+            "results": all_matches,
+        });
+
+        McpToolResult::ok(
+            &format!("Found {} matches in {} buffers", total_matches, all_matches.len()),
+            0,
+        )
+        .with_truth(
+            McpCertainty::Observed,
+            make_provenance("search_text_in_buffers", None, None),
+            data.clone(),
+            Some(data),
+        )
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone)]
+struct TextMatch {
+    line: usize,
+    column: usize,
+    byte_offset: usize,
+    byte_length: usize,
+    text: String,
+}
+
+fn find_text_matches(content: &str, query: &str, case_sensitive: bool) -> Vec<TextMatch> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let mut matches = Vec::new();
+    let query_len = query.len();
+
+    if case_sensitive {
+        for (byte_offset, _) in content.match_indices(query) {
+            let (line, column) = byte_offset_to_line_col(content, byte_offset);
+            matches.push(TextMatch {
+                line: line + 1,
+                column: column + 1,
+                byte_offset,
+                byte_length: query_len,
+                text: query.to_string(),
+            });
+        }
+    } else {
+        let content_lower = content.to_lowercase();
+        let query_lower = query.to_lowercase();
+        let mut search_from = 0;
+        while let Some(pos) = content_lower[search_from..].find(&query_lower) {
+            let byte_offset = search_from + pos;
+            let (line, column) = byte_offset_to_line_col(content, byte_offset);
+            matches.push(TextMatch {
+                line: line + 1,
+                column: column + 1,
+                byte_offset,
+                byte_length: query_len,
+                text: content[byte_offset..byte_offset + query_len].to_string(),
+            });
+            search_from = byte_offset + 1;
+        }
+    }
+
+    matches
+}
+
+fn byte_offset_to_line_col(content: &str, target_offset: usize) -> (usize, usize) {
+    let mut line = 0usize;
+    let mut col = 0usize;
+    let mut current_offset = 0usize;
+
+    for ch in content.chars() {
+        if current_offset >= target_offset {
+            break;
+        }
+        let ch_len = ch.len_utf8();
+        if ch == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += ch_len;
+        }
+        current_offset += ch_len;
+    }
+
+    (line, col)
+}
+
+// ---------------------------------------------------------------------------
+// Tool: query_symbols
+// ---------------------------------------------------------------------------
+
+struct QuerySymbolsTool;
+
+impl McpTool for QuerySymbolsTool {
+    fn name(&self) -> &str {
+        "query_symbols"
+    }
+
+    fn description(&self) -> &str {
+        "Query top-level symbols by name pattern across one or all open buffers."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Absolute file path (omit to search all open buffers)" },
+                "pattern": { "type": "string", "description": "Symbol name or prefix to match" },
+                "kind": { "type": "string", "description": "Filter by symbol kind: fn, struct, enum, trait, impl, mod, const, static, type" }
+            },
+            "required": ["pattern"]
+        })
+    }
+
+    fn execute(&self, registry: &BufferRegistry, args: &str) -> McpToolResult {
+        #[derive(Deserialize)]
+        struct Args {
+            path: Option<String>,
+            pattern: String,
+            kind: Option<String>,
+        }
+
+        let args: Args = match serde_json::from_str(args) {
+            Ok(a) => a,
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
+        };
+
+        let paths_to_search: Vec<String> = match &args.path {
+            Some(p) => vec![p.clone()],
+            None => registry.open_resources(),
+        };
+
+        let mut all_results = Vec::new();
+        let mut total_matches = 0usize;
+
+        for path in &paths_to_search {
+            let content = match registry.get_buffer_content(path) {
+                Some(c) => c,
+                None => continue,
+            };
+            let version_id = registry.get_buffer_version(path).unwrap_or(0);
+
+            let matches = query_symbols_in_text(&content, &args.pattern, args.kind.as_deref());
+            total_matches += matches.len();
+
+            if !matches.is_empty() {
+                all_results.push(serde_json::json!({
+                    "path": path,
+                    "version_id": version_id,
+                    "match_count": matches.len(),
+                    "matches": matches,
+                }));
+            }
+        }
+
+        let data = serde_json::json!({
+            "pattern": args.pattern,
+            "kind_filter": args.kind,
+            "total_matches": total_matches,
+            "buffers_searched": paths_to_search.len(),
+            "buffers_with_matches": all_results.len(),
+            "results": all_results,
+        });
+
+        McpToolResult::ok(
+            &format!("Found {} symbol matches in {} buffers", total_matches, all_results.len()),
+            0,
+        )
+        .with_truth(
+            McpCertainty::Observed,
+            make_provenance("query_symbols", None, None),
+            data.clone(),
+            Some(data),
+        )
+    }
+}
+
+fn query_symbols_in_text(
+    content: &str,
+    pattern: &str,
+    kind_filter: Option<&str>,
+) -> Vec<serde_json::Value> {
+    let pattern_lower = pattern.to_lowercase();
+    content
+        .lines()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let trimmed = line.trim_start();
+            let (kind, name) = if let Some(rest) = trimmed.strip_prefix("fn ") {
+                ("fn", rest.split(['(', '<', ' ']).next()?)
+            } else if let Some(rest) = trimmed.strip_prefix("struct ") {
+                ("struct", rest.split(['<', ' ']).next()?)
+            } else if let Some(rest) = trimmed.strip_prefix("enum ") {
+                ("enum", rest.split(['<', ' ']).next()?)
+            } else if let Some(rest) = trimmed.strip_prefix("trait ") {
+                ("trait", rest.split(['<', ' ']).next()?)
+            } else if let Some(rest) = trimmed.strip_prefix("impl ") {
+                if let Some(for_pos) = rest.find(" for ") {
+                    ("impl", rest[..for_pos].trim())
+                } else {
+                    ("impl", rest.split(' ').next()?)
+                }
+            } else if let Some(rest) = trimmed.strip_prefix("mod ") {
+                ("mod", rest.split(' ').next()?)
+            } else if let Some(rest) = trimmed.strip_prefix("const ") {
+                ("const", rest.split([':', ' ']).next()?)
+            } else if let Some(rest) = trimmed.strip_prefix("static ") {
+                ("static", rest.split([':', ' ']).next()?)
+            } else if let Some(rest) = trimmed.strip_prefix("type ") {
+                ("type", rest.split(['=', ' ']).next()?)
+            } else {
+                return None;
+            };
+
+            if let Some(filter) = kind_filter {
+                if kind != filter {
+                    return None;
+                }
+            }
+
+            if name.to_lowercase().contains(&pattern_lower) {
+                Some(serde_json::json!({
+                    "name": name,
+                    "kind": kind,
+                    "line": i + 1,
+                }))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Tool: diff_files
+// ---------------------------------------------------------------------------
+
+struct DiffFilesTool;
+
+impl McpTool for DiffFilesTool {
+    fn name(&self) -> &str {
+        "diff_files"
+    }
+
+    fn description(&self) -> &str {
+        "Return a line-level diff between two different files."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "from_path": { "type": "string", "description": "Source file path" },
+                "to_path": { "type": "string", "description": "Target file path" }
+            },
+            "required": ["from_path", "to_path"]
+        })
+    }
+
+    fn execute(&self, registry: &BufferRegistry, args: &str) -> McpToolResult {
+        #[derive(Deserialize)]
+        struct Args {
+            from_path: String,
+            to_path: String,
+        }
+
+        let args: Args = match serde_json::from_str(args) {
+            Ok(a) => a,
+            Err(e) => return McpToolResult::err(McpError::serialization(format!("Invalid arguments: {}", e))),
+        };
+
+        let from_bytes = match registry.get_buffer_content_bytes(&args.from_path) {
+            Some(b) => b,
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.from_path)),
+        };
+        let to_bytes = match registry.get_buffer_content_bytes(&args.to_path) {
+            Some(b) => b,
+            None => return McpToolResult::err(McpError::buffer_not_found(&args.to_path)),
+        };
+
+        let from_text = String::from_utf8_lossy(&from_bytes);
+        let to_text = String::from_utf8_lossy(&to_bytes);
+        let diff = compute_line_diff(&from_text, &to_text);
+
+        let from_version = registry.get_buffer_version(&args.from_path).unwrap_or(0);
+        let to_version = registry.get_buffer_version(&args.to_path).unwrap_or(0);
+
+        let data = serde_json::json!({
+            "from_path": args.from_path,
+            "to_path": args.to_path,
+            "from_version": from_version,
+            "to_version": to_version,
+            "from_sha256": sha256_hex(&from_bytes),
+            "to_sha256": sha256_hex(&to_bytes),
+            "lines_added": diff.lines_added,
+            "lines_removed": diff.lines_removed,
+            "lines_changed": diff.lines_changed,
+            "diff_chunks": diff.chunks,
+        });
+
+        McpToolResult::ok("Computed cross-file diff", to_version).with_truth(
+            McpCertainty::Observed,
+            make_provenance("diff_files", Some(&args.to_path), Some(to_version)),
             data.clone(),
             Some(data),
         )
@@ -1132,6 +2108,46 @@ pub fn get_buffer_version_lineage_tool(registry: &BufferRegistry, args: &str) ->
     GetBufferVersionLineageTool.execute(registry, args)
 }
 
+/// Execute the `compare_buffer_versions` MCP tool.
+pub fn compare_buffer_versions_tool(registry: &BufferRegistry, args: &str) -> McpToolResult {
+    CompareBufferVersionsTool.execute(registry, args)
+}
+
+/// Execute the `inspect_buffer_drift` MCP tool.
+pub fn inspect_buffer_drift_tool(registry: &BufferRegistry, args: &str) -> McpToolResult {
+    InspectBufferDriftTool.execute(registry, args)
+}
+
+/// Execute the `list_open_buffers` MCP tool.
+pub fn list_open_buffers_tool(registry: &BufferRegistry, _args: &str) -> McpToolResult {
+    ListOpenBuffersTool.execute(registry, _args)
+}
+
+/// Execute the `replay_buffer` MCP tool.
+pub fn replay_buffer_tool(registry: &BufferRegistry, args: &str) -> McpToolResult {
+    ReplayBufferTool.execute(registry, args)
+}
+
+/// Execute the `get_buffer_byte_range` MCP tool.
+pub fn get_buffer_byte_range_tool(registry: &BufferRegistry, args: &str) -> McpToolResult {
+    GetBufferByteRangeTool.execute(registry, args)
+}
+
+/// Execute the `search_text_in_buffers` MCP tool.
+pub fn search_text_in_buffers_tool(registry: &BufferRegistry, args: &str) -> McpToolResult {
+    SearchTextInBuffersTool.execute(registry, args)
+}
+
+/// Execute the `query_symbols` MCP tool.
+pub fn query_symbols_tool(registry: &BufferRegistry, args: &str) -> McpToolResult {
+    QuerySymbolsTool.execute(registry, args)
+}
+
+/// Execute the `diff_files` MCP tool.
+pub fn diff_files_tool(registry: &BufferRegistry, args: &str) -> McpToolResult {
+    DiffFilesTool.execute(registry, args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1197,7 +2213,10 @@ mod tests {
             r#"{"path":"test://a.rs","old_text":"world","new_text":"universe","expected_version":99}"#,
         );
         assert!(!result.success);
-        assert!(result.error.unwrap().contains("version conflict"));
+        assert_eq!(
+            result.error.as_ref().unwrap().kind,
+            McpErrorKind::VersionConflict
+        );
     }
 
     #[test]
@@ -1342,10 +2361,10 @@ mod tests {
         let result =
             get_symbol_at_position_tool(&registry, r#"{"path":"test://a.rs","line":3,"column":1}"#);
         assert!(!result.success);
-        assert!(result
-            .error
-            .expect("missing symbol error")
-            .contains("No symbol found"));
+        assert_eq!(
+            result.error.as_ref().unwrap().kind,
+            McpErrorKind::InvalidEdit
+        );
     }
 
     #[test]
@@ -1356,10 +2375,12 @@ mod tests {
         assert_eq!(result.certainty, Some(McpCertainty::Observed));
         let data = result.data.expect("expected lineage data");
         assert_eq!(data["current_version_id"], 1);
-        assert_eq!(data["lineage_model"], "monotonic_version_counter");
+        assert_eq!(data["lineage_model"], "bounded_snapshot_history");
+        assert_eq!(data["historical_version_count"], 1);
+        assert!(data["historical_versions"].as_array().unwrap().contains(&serde_json::json!(1)));
         assert_eq!(
             data["lineage_capabilities"]["historical_versions_stored"],
-            false
+            true
         );
         assert_eq!(
             data["lineage_capabilities"]["snapshot_proof_available_for_current_version"],
@@ -1380,6 +2401,14 @@ mod tests {
         assert!(names.contains(&"get_symbol_index".to_string()));
         assert!(names.contains(&"get_symbol_at_position".to_string()));
         assert!(names.contains(&"get_buffer_version_lineage".to_string()));
+        assert!(names.contains(&"compare_buffer_versions".to_string()));
+        assert!(names.contains(&"inspect_buffer_drift".to_string()));
+        assert!(names.contains(&"list_open_buffers".to_string()));
+        assert!(names.contains(&"replay_buffer".to_string()));
+        assert!(names.contains(&"get_buffer_byte_range".to_string()));
+        assert!(names.contains(&"search_text_in_buffers".to_string()));
+        assert!(names.contains(&"query_symbols".to_string()));
+        assert!(names.contains(&"diff_files".to_string()));
     }
 
     #[test]
@@ -1390,6 +2419,133 @@ mod tests {
             r#"{"path":"test://missing.rs","old_text":"x","new_text":"y"}"#,
         );
         assert!(!result.success);
-        assert!(result.error.unwrap().contains("not found"));
+        assert_eq!(
+            result.error.as_ref().unwrap().kind,
+            McpErrorKind::BufferNotFound
+        );
+    }
+
+    #[test]
+    fn mcp_list_open_buffers_tool_lists_buffers() {
+        let mut registry = BufferRegistry::new();
+        registry.open_buffer("test://a.rs".to_string(), "fn main() {}");
+        registry.open_buffer("test://b.rs".to_string(), "struct Point;");
+        let result = list_open_buffers_tool(&registry, r#"{}"#);
+        assert!(result.success);
+        let data = result.data.expect("expected data");
+        assert_eq!(data["count"], 2);
+        let buffers = data["buffers"].as_array().unwrap();
+        let paths: Vec<String> = buffers
+            .iter()
+            .map(|b| b["path"].as_str().unwrap().to_string())
+            .collect();
+        assert!(paths.contains(&"test://a.rs".to_string()));
+        assert!(paths.contains(&"test://b.rs".to_string()));
+    }
+
+    #[test]
+    fn mcp_replay_buffer_tool_replays_version() {
+        let mut registry = BufferRegistry::new();
+        registry.open_buffer("test://a.rs".to_string(), "v1");
+        // edit to create v2
+        let change = ContentChange::insert(Position::new(1, 3), " changed".to_string(), 2);
+        registry.apply_edit("test://a.rs", &change);
+        let result = replay_buffer_tool(
+            &registry,
+            r#"{"path":"test://a.rs","version_id":1}"#,
+        );
+        assert!(result.success);
+        let data = result.data.expect("expected data");
+        assert_eq!(data["version_id"], 1);
+        assert_eq!(data["content"], "v1");
+    }
+
+    #[test]
+    fn mcp_get_buffer_byte_range_tool_reads_slice() {
+        let registry = make_registry_with_file("test://a.rs", "hello world");
+        let result = get_buffer_byte_range_tool(
+            &registry,
+            r#"{"path":"test://a.rs","offset":6,"length":5}"#,
+        );
+        assert!(result.success);
+        let data = result.data.expect("expected data");
+        assert_eq!(data["content"], "world");
+        assert_eq!(data["offset"], 6);
+        assert_eq!(data["actual_length"], 5);
+    }
+
+    #[test]
+    fn mcp_search_text_in_buffers_tool_finds_matches() {
+        let mut registry = BufferRegistry::new();
+        registry.open_buffer("test://a.rs".to_string(), "fn main() {}\nfn helper() {}");
+        registry.open_buffer("test://b.rs".to_string(), "struct Main;");
+        let result = search_text_in_buffers_tool(
+            &registry,
+            r#"{"query":"fn","case_sensitive":true}"#,
+        );
+        assert!(result.success);
+        let data = result.data.expect("expected data");
+        assert_eq!(data["total_matches"], 2);
+        let results = data["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1); // only a.rs has matches
+        assert_eq!(results[0]["path"], "test://a.rs");
+        assert_eq!(results[0]["match_count"], 2);
+    }
+
+    #[test]
+    fn mcp_query_symbols_tool_finds_by_pattern() {
+        let mut registry = BufferRegistry::new();
+        registry.open_buffer(
+            "test://a.rs".to_string(),
+            "fn main() {}\nfn helper() {}\nstruct Point { x: i32 }",
+        );
+        let result = query_symbols_tool(
+            &registry,
+            r#"{"path":"test://a.rs","pattern":"hel"}"#,
+        );
+        assert!(result.success);
+        let data = result.data.expect("expected data");
+        assert_eq!(data["total_matches"], 1);
+        let results = data["results"].as_array().unwrap();
+        assert_eq!(results[0]["match_count"], 1);
+        let matches = results[0]["matches"].as_array().unwrap();
+        assert_eq!(matches[0]["name"], "helper");
+        assert_eq!(matches[0]["kind"], "fn");
+    }
+
+    #[test]
+    fn mcp_query_symbols_tool_filters_by_kind() {
+        let mut registry = BufferRegistry::new();
+        registry.open_buffer(
+            "test://a.rs".to_string(),
+            "fn main() {}\nstruct Point {}\nenum Color { Red }",
+        );
+        let result = query_symbols_tool(
+            &registry,
+            r#"{"path":"test://a.rs","pattern":"","kind":"struct"}"#,
+        );
+        assert!(result.success);
+        let data = result.data.expect("expected data");
+        assert_eq!(data["total_matches"], 1);
+        let results = data["results"].as_array().unwrap();
+        let matches = results[0]["matches"].as_array().unwrap();
+        assert_eq!(matches[0]["name"], "Point");
+        assert_eq!(matches[0]["kind"], "struct");
+    }
+
+    #[test]
+    fn mcp_diff_files_tool_compares_buffers() {
+        let mut registry = BufferRegistry::new();
+        registry.open_buffer("test://a.rs".to_string(), "fn main() {}");
+        registry.open_buffer("test://b.rs".to_string(), "fn helper() {}");
+        let result = diff_files_tool(
+            &registry,
+            r#"{"from_path":"test://a.rs","to_path":"test://b.rs"}"#,
+        );
+        assert!(result.success);
+        let data = result.data.expect("expected data");
+        assert_eq!(data["from_path"], "test://a.rs");
+        assert_eq!(data["to_path"], "test://b.rs");
+        assert!(data["lines_changed"].as_u64().unwrap() > 0);
     }
 }

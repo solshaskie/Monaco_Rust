@@ -1,3 +1,5 @@
+/* @ts-self-types="./monaco_wasm.d.ts" */
+
 /**
  * Parse a compact binary delta or snapshot from Rust `wasm_sync`.
  *
@@ -86,32 +88,32 @@ export function compute_layout(source, line_width) {
 }
 
 /**
- * Compute viewport-visible lines given a scroll offset and viewport height.
+ * Compute viewport-visible lines given total line count, scroll offset and viewport height.
  * Returns { "start_line": 0, "end_line": 0 }
- * @param {string} source
+ * Callers should cache `total_lines` (e.g. from `count_lines`) to avoid
+ * re-scanning the source on every scroll event.
+ * @param {number} total_lines
  * @param {number} line_height_px
  * @param {number} scroll_top_px
  * @param {number} viewport_height_px
  * @returns {string}
  */
-export function compute_visible_lines(source, line_height_px, scroll_top_px, viewport_height_px) {
-    let deferred3_0;
-    let deferred3_1;
+export function compute_visible_lines(total_lines, line_height_px, scroll_top_px, viewport_height_px) {
+    let deferred2_0;
+    let deferred2_1;
     try {
-        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-        const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.compute_visible_lines(ptr0, len0, line_height_px, scroll_top_px, viewport_height_px);
-        var ptr2 = ret[0];
-        var len2 = ret[1];
+        const ret = wasm.compute_visible_lines(total_lines, line_height_px, scroll_top_px, viewport_height_px);
+        var ptr1 = ret[0];
+        var len1 = ret[1];
         if (ret[3]) {
-            ptr2 = 0; len2 = 0;
+            ptr1 = 0; len1 = 0;
             throw takeFromExternrefTable0(ret[2]);
         }
-        deferred3_0 = ptr2;
-        deferred3_1 = len2;
-        return getStringFromWasm0(ptr2, len2);
+        deferred2_0 = ptr1;
+        deferred2_1 = len1;
+        return getStringFromWasm0(ptr1, len1);
     } finally {
-        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
     }
 }
 
@@ -227,6 +229,15 @@ export function start() {
  */
 export function token_cache_len() {
     const ret = wasm.token_cache_len();
+    return ret >>> 0;
+}
+
+/**
+ * Return approximate total cached bytes.
+ * @returns {number}
+ */
+export function token_cache_total_bytes() {
+    const ret = wasm.token_cache_total_bytes();
     return ret >>> 0;
 }
 

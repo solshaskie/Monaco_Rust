@@ -38,9 +38,9 @@ This makes it useful wherever another project needs a precise human-facing editi
 
 ### 2. Explicit Contracts Instead of Hidden Coupling
 
-Monaco_Rust brings explicit protobuf contracts for editor, host, file, language, and event surfaces.
+Monaco_Rust brings explicit type contracts for editor, host, file, language, and event surfaces.
 
-That means adjacent projects can integrate with it through known shapes instead of accidental internal assumptions.
+Internal Rust types are generated from protobuf schemas; the IPC boundary between Rust and the frontend is JSON-encoded over Tauri's invoke API. That means adjacent projects can integrate with it through known shapes instead of accidental internal assumptions.
 
 It is suitable for projects that value:
 
@@ -89,13 +89,21 @@ Current agent-facing capabilities include:
 
 - `read_file`
 - `edit_file`
-- `list_symbols`
 - `apply_edits`
+- `list_symbols`
+- `get_symbol_at_position`
 - `get_buffer_metadata`
+- `get_buffer_version_lineage`
 - `get_buffer_snapshot_proof`
 - `get_symbol_index`
-- `get_symbol_at_position`
-- `get_buffer_version_lineage`
+- `compare_buffer_versions`
+- `inspect_buffer_drift`
+- `diff_files`
+- `list_open_buffers`
+- `replay_buffer`
+- `get_buffer_byte_range`
+- `search_text_in_buffers`
+- `query_symbols`
 
 These are meaningful because they operate against the same authoritative runtime state as the UI, not a parallel shadow layer.
 

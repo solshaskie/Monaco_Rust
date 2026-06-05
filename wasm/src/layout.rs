@@ -17,12 +17,16 @@ pub struct VisibleLines {
 }
 
 /// Compute layout for each line given a maximum characters-per-line width.
+/// Uses byte-length as a fast proxy for char count; assumes source is
+/// primarily ASCII (true for most code). For UTF-8 multi-byte chars,
+/// byte-length >= char count, so wrap computation is conservative
+/// (may wrap slightly earlier than strictly necessary).
 pub fn compute_line_layout(source: &str, line_width: usize) -> Vec<LineLayout> {
     source
         .lines()
         .enumerate()
         .map(|(i, line)| {
-            let char_count = line.chars().count();
+            let char_count = line.len(); // byte-length proxy for ASCII source
             let wrap_count = if line_width == 0 {
                 0
             } else {
@@ -39,20 +43,21 @@ pub fn compute_line_layout(source: &str, line_width: usize) -> Vec<LineLayout> {
 }
 
 /// Compute which lines are visible given scroll position and viewport height.
+/// `total_lines` should be cached by the caller (e.g. from `count_lines`)
+/// to avoid re-scanning the source on every scroll event.
 pub fn compute_visible_lines(
-    source: &str,
+    total_lines: usize,
     line_height_px: f64,
     scroll_top_px: f64,
     viewport_height_px: f64,
 ) -> VisibleLines {
-    if line_height_px <= 0.0 {
+    if line_height_px <= 0.0 || total_lines == 0 {
         return VisibleLines {
             start_line: 0,
             end_line: 0,
         };
     }
 
-    let total_lines = source.lines().count();
     let start_line = (scroll_top_px / line_height_px).floor() as usize;
     let visible_count = (viewport_height_px / line_height_px).ceil() as usize;
     let end_line = (start_line + visible_count).min(total_lines);
@@ -65,9 +70,10 @@ pub fn compute_visible_lines(
 
 /// Compute the byte offset → screen position mapping for a single line.
 /// Returns `(column, line_in_wrap)` for a given byte offset within a line.
+/// Uses byte offset directly as column proxy (fast for ASCII source code).
 #[allow(dead_code)]
 pub fn position_in_wrapped_line(line: &str, byte_offset: usize, line_width: usize) -> (usize, usize) {
-    let col = line[..byte_offset.min(line.len())].chars().count();
+    let col = byte_offset.min(line.len());
     if line_width == 0 {
         return (col, 0);
     }
@@ -98,16 +104,16 @@ mod tests {
 
     #[test]
     fn visible_lines_basic() {
-        let source = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj";
-        let visible = compute_visible_lines(source, 20.0, 0.0, 60.0);
+        let total_lines = 10;
+        let visible = compute_visible_lines(total_lines, 20.0, 0.0, 60.0);
         assert_eq!(visible.start_line, 0);
         assert_eq!(visible.end_line, 3); // 60/20 = 3 lines visible
     }
 
     #[test]
     fn visible_lines_scrolled() {
-        let source = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj";
-        let visible = compute_visible_lines(source, 20.0, 40.0, 60.0);
+        let total_lines = 10;
+        let visible = compute_visible_lines(total_lines, 20.0, 40.0, 60.0);
         assert_eq!(visible.start_line, 2); // scrolled 40px = 2 lines
         assert_eq!(visible.end_line, 5);
     }

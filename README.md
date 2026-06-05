@@ -8,10 +8,10 @@ Runtime posture: this repo now stands on a local Rust/Tauri runtime plus checked
 
 **Hybrid: Native Rust backend + WASM compute modules inside Monaco webview.**
 
-- **Rust backend** (`src-tauri/`) — authoritative buffer state, file system, protobuf IPC
+- **Rust backend** (`src-tauri/`) — authoritative buffer state, file system, LSP lifecycle, MCP tools, JSON IPC
 - **Monaco frontend** (`tauri/`) — editor UI, served in Tauri webview
-- **WASM compute** (`wasm/`) — tokenization, diffing, layout, semantic analysis
-- **Incremental sync** (`src-tauri/src/wasm_sync.rs`) — Rust sends only changed lines to WASM
+- **WASM compute** (`wasm/`) — tokenization, diffing, layout, LRU-cached tokenization with 32MB cap and SHA-256 keying
+- **Incremental sync** (`src-tauri/src/wasm_sync.rs`) — Rust sends only changed lines to WASM; binary delta format available
 
 ## Quick Start
 
@@ -34,25 +34,27 @@ cargo tauri build --config src-tauri/tauri.conf.json
 | `tauri/` | Frontend — Monaco editor, WASM glue, renderer |
 | `tauri-dist/` | Prepared static frontend bundle served by Tauri |
 | `wasm/` | WASM compute crate — tokenize, diff, layout (Rust → wasm-bindgen) |
-| `proto/` | Protobuf schemas for Rust ↔ frontend IPC |
+| `proto/` | Protobuf schemas (generate internal Rust types; wire transport is JSON) |
 | `build/wasm/` | WASM build automation |
 | `scripts/` | Shell-based Tauri packaging scripts |
 | `.github/workflows/` | CI and release automation |
 
 ## Current State
 
-- **Rust/Tauri runtime is the authoritative substrate** — buffer state, file operations, syntax services, and MCP tools are real and verified.
-- **WASM compute lane exists** — the `wasm/` crate, generated browser bundle, and frontend glue are present for tokenization, diffing, and layout helpers.
-- **Incremental sync path now exists end-to-end** — `src-tauri/src/wasm_sync.rs` plus the frontend WASM sync manager can prime and refresh Rust-owned snapshot/delta state on open and edit flows, and the current token consumers now respect the sync barrier during burst edits. The binary transport path exists too, but it is not yet the default frontend path.
-- **Renderer experiments exist** — virtual-scroll, decoration, and compatibility adapters are in-repo, but they should be treated as prototype surfaces rather than fully proven replacements for Monaco's default renderer.
-- **Security sandbox** — capability-based permissions for file system access.
-- **MCP agent integration** — Model Context Protocol tools for agent-driven editing and inspection.
+- **Rust/Tauri runtime is the authoritative substrate** — buffer state, file operations, LSP client lifecycle, syntax services, and MCP tools are real and verified.
+- **WASM compute lane hardened** — `wasm/` crate ships dead-code-free `diff.rs`, byte-indexed `layout.rs`, LRU-cached `cache.rs` (32MB cap, SHA-256 keying), and `.d.ts` bindings via `wasm-bindgen`.
+- **Incremental sync path exists end-to-end** — `src-tauri/src/wasm_sync.rs` plus the frontend WASM sync manager prime and refresh Rust-owned snapshot/delta state on open and edit flows. Token consumers respect the sync barrier during burst edits.
+- **Virtual scroll replacement renderer proven** — `virtual-scroll.js` can mount as the primary renderer for large buffers (>10k lines) via `mountAsPrimary()`. Per-line token hashing eliminates decoration flicker. The `compatibility.js` shim has double-patch guards and idempotent disposal for safe Monaco upgrades.
+- **Security sandbox** — capability-based permissions for file system access with real path containment tests.
+- **MCP agent integration** — Model Context Protocol tools for agent-driven editing, inspection, and structural review.
+- **LSP performance hardened** — debounced diagnostics (150ms), batched `didChange` notifications (50ms), and cached `SyntaxParser` per language.
+- **CI hardened** — cargo audit + cargo deny, SHA-pinned actions, `dtolnay/rust-toolchain` correction, and cargo-fuzz targets that compile on nightly.
 - **Emancipated build path** — Tauri prep/build no longer depends on project-level Node tooling.
 
 ## Testing
 
 ```bash
-# Rust backend tests
+# Rust backend tests (2 pre-existing TypeScript parser failures unrelated to current changes)
 cd src-tauri && cargo test --all-targets
 
 # Prepare frontend bundle without Node
@@ -60,6 +62,11 @@ bash ./scripts/prepare-tauri-dist.sh
 
 # WASM crate tests
 cd wasm && cargo test
+
+# cargo-fuzz targets (requires nightly)
+cd src-tauri && cargo +nightly fuzz build fuzz_apply_change
+cargo +nightly fuzz build fuzz_tokenize
+cargo +nightly fuzz build fuzz_compute_line_delta
 ```
 
 ## Roadmap

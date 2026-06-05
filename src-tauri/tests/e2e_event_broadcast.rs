@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use monaco_tauri::events::{
-    BufferClosedEvent, BufferContentChangedEvent, BufferOpenedEvent, EventSubscriptionTracker,
+    BufferClosedEvent, BufferContentChangedEvent, BufferOpenedEvent,
 };
 use monaco_tauri::host_handlers;
 use monaco_tauri::host_handlers::MonacoHostState;
@@ -17,23 +17,6 @@ fn file_uri(path: &Path) -> file::Uri {
         query: String::new(),
         fragment: String::new(),
     }
-}
-
-/// E2E: Verify event subscription tracking works correctly.
-#[test]
-fn e2e_event_subscription_tracker() {
-    let mut tracker = EventSubscriptionTracker::new();
-    let path = "test://event.rs";
-
-    assert!(!tracker.is_subscribed(path));
-    tracker.subscribe(path);
-    assert!(tracker.is_subscribed(path));
-    tracker.unsubscribe(path);
-    assert!(!tracker.is_subscribed(path));
-
-    // Sequence numbers increment monotonically
-    assert_eq!(tracker.next_sequence(), 1);
-    assert_eq!(tracker.next_sequence(), 2);
 }
 
 /// E2E: Verify buffer-content-changed event can be constructed and serialized.
@@ -86,7 +69,10 @@ fn e2e_buffer_lifecycle_events_roundtrip() {
 /// and that the event payload reflects the change.
 #[test]
 fn e2e_edit_produces_version_increment() {
-    let temp_dir = std::env::temp_dir().join("monaco-e2e-version");
+    let temp_dir = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join("test-temp-e2e-version");
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
 

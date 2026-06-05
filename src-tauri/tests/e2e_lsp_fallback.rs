@@ -1,7 +1,10 @@
 use std::fs;
 use std::path::Path;
 
+use monaco_tauri::host_handlers;
 use monaco_tauri::host_handlers::MonacoHostState;
+use monaco_tauri::proto::code::ipc::editor;
+use monaco_tauri::proto::code::ipc::editor::host;
 use monaco_tauri::proto::code::ipc::editor::language;
 use monaco_tauri::proto::code::ipc::file;
 use monaco_tauri::syntax_handlers;
@@ -31,17 +34,26 @@ fn e2e_completion_lsp_fallback_to_tree_sitter() {
     .unwrap();
 
     let state = MonacoHostState::new();
-    {
-        let mut registry = state.buffer_registry().write().unwrap();
-        registry
-            .open_buffer_from_bytes(
-                file_uri(&path).path.clone(),
-                b"fn main() { let x = 1; }\nstruct Point { x: i32, y: i32 }\n",
-            )
-            .unwrap();
-    }
+    // Set workspace root so temp files are within workspace
+    host_handlers::set_primary_workspace_root(
+        &state,
+        host::SetPrimaryWorkspaceRootRequest {
+            resource: Some(file_uri(&temp_dir)),
+        },
+    )
+    .unwrap();
+    // Use open_document to trigger proper LSP did_open lifecycle
+    host_handlers::open_document(
+        &state,
+        host::OpenDocumentRequest {
+            resource: Some(file_uri(&path)),
+            create_if_missing: false,
+            preferred_language_id: String::new(),
+        },
+    )
+    .unwrap();
 
-    let registry = state.buffer_registry().read().unwrap();
+    let registry = state.buffer_registry().read();
     let response = syntax_handlers::completion_document(
         &registry,
         None, // No LSP registry
@@ -73,14 +85,24 @@ fn e2e_diagnostics_lsp_fallback_to_tree_sitter() {
     fs::write(&path, "fn main() { @ }\n").unwrap();
 
     let state = MonacoHostState::new();
-    {
-        let mut registry = state.buffer_registry().write().unwrap();
-        registry
-            .open_buffer_from_bytes(file_uri(&path).path.clone(), b"fn main() { @ }\n")
-            .unwrap();
-    }
+    host_handlers::set_primary_workspace_root(
+        &state,
+        host::SetPrimaryWorkspaceRootRequest {
+            resource: Some(file_uri(&temp_dir)),
+        },
+    )
+    .unwrap();
+    host_handlers::open_document(
+        &state,
+        host::OpenDocumentRequest {
+            resource: Some(file_uri(&path)),
+            create_if_missing: false,
+            preferred_language_id: String::new(),
+        },
+    )
+    .unwrap();
 
-    let registry = state.buffer_registry().read().unwrap();
+    let registry = state.buffer_registry().read();
     let response = syntax_handlers::diagnostics_document(
         &registry,
         None, // No LSP registry
@@ -111,14 +133,24 @@ fn e2e_code_actions_empty_when_no_lsp() {
     fs::write(&path, "fn main() {}\n").unwrap();
 
     let state = MonacoHostState::new();
-    {
-        let mut registry = state.buffer_registry().write().unwrap();
-        registry
-            .open_buffer_from_bytes(file_uri(&path).path.clone(), b"fn main() {}\n")
-            .unwrap();
-    }
+    host_handlers::set_primary_workspace_root(
+        &state,
+        host::SetPrimaryWorkspaceRootRequest {
+            resource: Some(file_uri(&temp_dir)),
+        },
+    )
+    .unwrap();
+    host_handlers::open_document(
+        &state,
+        host::OpenDocumentRequest {
+            resource: Some(file_uri(&path)),
+            create_if_missing: false,
+            preferred_language_id: String::new(),
+        },
+    )
+    .unwrap();
 
-    let registry = state.buffer_registry().read().unwrap();
+    let registry = state.buffer_registry().read();
     let response = syntax_handlers::code_actions_document(
         &registry,
         None, // No LSP registry
@@ -142,7 +174,10 @@ fn e2e_code_actions_empty_when_no_lsp() {
 /// E2E: Document open/close triggers LSP lifecycle notifications without crashing.
 #[test]
 fn e2e_lsp_document_lifecycle_notifications() {
-    let temp_dir = std::env::temp_dir().join("monaco-e2e-lsp-lifecycle");
+    let temp_dir = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join("test-temp-lsp-lifecycle");
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
 

@@ -9,8 +9,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// A pending request waiting for a JSON-RPC response.
+enum ResponseSender {
+    Sync(std::sync::mpsc::Sender<Result<Value, String>>),
+    Async(tokio::sync::oneshot::Sender<Result<Value, String>>),
+}
+
 struct PendingRequest {
-    sender: std::sync::mpsc::Sender<Result<Value, String>>,
+    sender: ResponseSender,
 }
 
 /// Shared state between the client handle and the background reader thread.
@@ -110,8 +115,13 @@ impl LspClient {
         Ok(client)
     }
 
-    /// Sends a JSON-RPC request and blocks for the response (with timeout).
-    pub fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+    /// Sends a JSON-RPC request and blocks for the response (with custom timeout).
+    pub fn request_with_timeout(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
         let id = {
             let mut state = self.state.lock().unwrap();
             let id = state.next_id;
@@ -124,7 +134,7 @@ impl LspClient {
             let mut state = self.state.lock().unwrap();
             state
                 .pending
-                .insert(id.clone(), PendingRequest { sender: tx });
+                .insert(id.clone(), PendingRequest { sender: ResponseSender::Sync(tx) });
         }
 
         let envelope = JsonRpcRequest {
@@ -143,9 +153,8 @@ impl LspClient {
             stdin.flush().map_err(|e| e.to_string())?;
         }
 
-        match rx.recv_timeout(Duration::from_secs(5)) {
+        match rx.recv_timeout(timeout) {
             Ok(result) => {
-                // Clean up pending even on timeout/Ok to avoid leaking senders
                 let mut state = self.state.lock().unwrap();
                 state.pending.remove(&id);
                 result
@@ -156,6 +165,76 @@ impl LspClient {
                 Err(format!("LSP request '{}' timed out", method))
             }
         }
+    }
+
+    /// Sends a JSON-RPC request and blocks for the response (with 2s timeout).
+    pub fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        self.request_with_timeout(method, params, Duration::from_secs(2))
+    }
+
+    /// Sends a JSON-RPC request asynchronously, returning a future.
+    pub async fn request_async(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
+        let id = {
+            let mut state = self.state.lock().unwrap();
+            let id = state.next_id;
+            state.next_id += 1;
+            id.to_string()
+        };
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        {
+            let mut state = self.state.lock().unwrap();
+            state
+                .pending
+                .insert(id.clone(), PendingRequest { sender: ResponseSender::Async(tx) });
+        }
+
+        let envelope = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: id.clone(),
+            method: method.to_string(),
+            params,
+        };
+
+        let body = serde_json::to_string(&envelope).map_err(|e| e.to_string())?;
+        let msg = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
+
+        {
+            let mut stdin = self.stdin.lock().unwrap();
+            stdin.write_all(msg.as_bytes()).map_err(|e| e.to_string())?;
+            stdin.flush().map_err(|e| e.to_string())?;
+        }
+
+        match rx.await {
+            Ok(result) => {
+                let mut state = self.state.lock().unwrap();
+                state.pending.remove(&id);
+                result
+            }
+            Err(_) => {
+                let mut state = self.state.lock().unwrap();
+                state.pending.remove(&id);
+                Err(format!("LSP request '{}' cancelled", method))
+            }
+        }
+    }
+
+    /// Attempts a graceful shutdown with a bounded timeout.
+    /// Returns Ok even if the server does not respond in time.
+    pub fn try_shutdown(&mut self) -> Result<(), String> {
+        let _ = self.request_with_timeout(
+            "shutdown",
+            serde_json::json!({}),
+            Duration::from_millis(500),
+        );
+        self.notify("exit", serde_json::json!({}));
+        let mut state = self.state.lock().unwrap();
+        state.shut_down = true;
+        Ok(())
     }
 
     /// Sends a JSON-RPC notification (no response expected).
@@ -266,16 +345,19 @@ impl LspClient {
                     _ => continue,
                 };
                 let sender = {
-                    let state = state.lock().unwrap();
-                    state.pending.get(&id_str).map(|p| p.sender.clone())
+                    let mut state = state.lock().unwrap();
+                    state.pending.remove(&id_str)
                 };
-                if let Some(sender) = sender {
+                if let Some(pending) = sender {
                     let result = if let Some(err) = response.error {
                         Err(format!("LSP error {}: {}", err.code, err.message))
                     } else {
                         Ok(response.result.unwrap_or(Value::Null))
                     };
-                    let _ = sender.send(result);
+                    match pending.sender {
+                        ResponseSender::Sync(tx) => { let _ = tx.send(result); }
+                        ResponseSender::Async(tx) => { let _ = tx.send(result); }
+                    }
                 }
             }
         }
@@ -286,7 +368,7 @@ impl Drop for LspClient {
     fn drop(&mut self) {
         let is_shutdown = self.state.lock().unwrap().shut_down;
         if !is_shutdown {
-            let _ = self.shutdown();
+            let _ = self.try_shutdown();
         }
     }
 }

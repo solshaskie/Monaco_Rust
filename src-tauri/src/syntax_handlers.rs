@@ -9,16 +9,39 @@ use crate::syntax::{
     extract_folding_ranges, hover_at_position, pack_semantic_tokens, prefix_at_position,
     tokenize_tree, tokenize_tree_range, SyntaxParser,
 };
+use std::cell::RefCell;
+use std::collections::HashMap;
 
-/// Selects the appropriate Tree-sitter parser based on a file path's extension.
-fn parser_for_path(path: &str) -> Result<SyntaxParser, String> {
+thread_local! {
+    static PARSER_CACHE: RefCell<HashMap<String, SyntaxParser>> = RefCell::new(HashMap::new());
+}
+
+/// Runs the given closure with a cached Tree-sitter parser for the file path's language.
+/// Parsers are created once per language and reused to avoid repeated grammar loading.
+fn with_parser_for_path<F, R>(path: &str, f: F) -> Result<R, String>
+where
+    F: FnOnce(&mut SyntaxParser) -> Result<R, String>,
+{
     let ext = path.rfind('.').map(|i| &path[i..]);
-    match ext {
-        Some(".js") | Some(".mjs") | Some(".cjs") => SyntaxParser::for_javascript(),
-        Some(".ts") | Some(".mts") | Some(".cts") => SyntaxParser::for_typescript(),
-        Some(".tsx") => SyntaxParser::for_typescript(),
-        _ => SyntaxParser::for_rust(),
-    }
+    let language_key = match ext {
+        Some(".js") | Some(".mjs") | Some(".cjs") => "javascript",
+        Some(".ts") | Some(".mts") | Some(".cts") | Some(".tsx") => "typescript",
+        _ => "rust",
+    };
+
+    PARSER_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if !cache.contains_key(language_key) {
+            let parser = match ext {
+                Some(".js") | Some(".mjs") | Some(".cjs") => SyntaxParser::for_javascript(),
+                Some(".ts") | Some(".mts") | Some(".cts") | Some(".tsx") => SyntaxParser::for_typescript(),
+                _ => SyntaxParser::for_rust(),
+            }?;
+            cache.insert(language_key.to_string(), parser);
+        }
+        let parser = cache.get_mut(language_key).unwrap();
+        f(parser)
+    })
 }
 
 /// Returns the diagnostic source label for a given file path.
@@ -47,10 +70,11 @@ pub fn tokenize_document(
 
     let version_id = registry.get_buffer_version(&resource.path).unwrap_or(1);
 
-    let mut parser = parser_for_path(&resource.path)?;
-    let parsed = parser
-        .parse(&content)
-        .map_err(|e| format!("Parse failed: {}", e))?;
+    let parsed = with_parser_for_path(&resource.path, |parser| {
+        parser
+            .parse(&content)
+            .map_err(|e| format!("Parse failed: {}", e))
+    })?;
 
     let has_errors = parsed.tree.root_node().has_error();
     let tokens = tokenize_tree(&parsed.tree, &content);
@@ -93,10 +117,11 @@ pub fn tokenize_document_range(
 
     let version_id = registry.get_buffer_version(&resource.path).unwrap_or(1);
 
-    let mut parser = parser_for_path(&resource.path)?;
-    let parsed = parser
-        .parse(&content)
-        .map_err(|e| format!("Parse failed: {}", e))?;
+    let parsed = with_parser_for_path(&resource.path, |parser| {
+        parser
+            .parse(&content)
+            .map_err(|e| format!("Parse failed: {}", e))
+    })?;
 
     let has_errors = parsed.tree.root_node().has_error();
     let tokens = tokenize_tree_range(&parsed.tree, &content, start_line, end_line);
@@ -136,10 +161,11 @@ pub fn fold_document(
 
     let version_id = registry.get_buffer_version(&resource.path).unwrap_or(1);
 
-    let mut parser = parser_for_path(&resource.path)?;
-    let parsed = parser
-        .parse(&content)
-        .map_err(|e| format!("Parse failed: {}", e))?;
+    let parsed = with_parser_for_path(&resource.path, |parser| {
+        parser
+            .parse(&content)
+            .map_err(|e| format!("Parse failed: {}", e))
+    })?;
 
     let ranges = extract_folding_ranges(&parsed.tree);
 
@@ -174,10 +200,11 @@ pub fn semantic_tokens_document(
 
     let version_id = registry.get_buffer_version(&resource.path).unwrap_or(1);
 
-    let mut parser = parser_for_path(&resource.path)?;
-    let parsed = parser
-        .parse(&content)
-        .map_err(|e| format!("Parse failed: {}", e))?;
+    let parsed = with_parser_for_path(&resource.path, |parser| {
+        parser
+            .parse(&content)
+            .map_err(|e| format!("Parse failed: {}", e))
+    })?;
 
     let tokens = tokenize_tree(&parsed.tree, &content);
     let data = pack_semantic_tokens(&tokens);
@@ -218,10 +245,11 @@ pub fn semantic_tokens_delta_document(
         });
     }
 
-    let mut parser = parser_for_path(&resource.path)?;
-    let parsed = parser
-        .parse(&content)
-        .map_err(|e| format!("Parse failed: {}", e))?;
+    let parsed = with_parser_for_path(&resource.path, |parser| {
+        parser
+            .parse(&content)
+            .map_err(|e| format!("Parse failed: {}", e))
+    })?;
 
     let tokens = tokenize_tree(&parsed.tree, &content);
     let data = pack_semantic_tokens(&tokens);
@@ -248,10 +276,11 @@ pub fn hover_document(
         .get_buffer_content(&resource.path)
         .ok_or_else(|| format!("No buffer found for resource: {}", resource.path))?;
 
-    let mut parser = parser_for_path(&resource.path)?;
-    let parsed = parser
-        .parse(&content)
-        .map_err(|e| format!("Parse failed: {}", e))?;
+    let parsed = with_parser_for_path(&resource.path, |parser| {
+        parser
+            .parse(&content)
+            .map_err(|e| format!("Parse failed: {}", e))
+    })?;
 
     let hover = hover_at_position(&parsed.tree, &content, request.line, request.column)
         .ok_or_else(|| "No node found at position".to_string())?;
@@ -336,10 +365,11 @@ pub fn diagnostics_document(
     }
 
     // Always include Tree-sitter parse errors
-    let mut parser = parser_for_path(&resource.path)?;
-    let parsed = parser
-        .parse(&content)
-        .map_err(|e| format!("Parse failed: {}", e))?;
+    let parsed = with_parser_for_path(&resource.path, |parser| {
+        parser
+            .parse(&content)
+            .map_err(|e| format!("Parse failed: {}", e))
+    })?;
 
     let source_label = diagnostic_source_for_path(&resource.path);
     let syntax_diagnostics = collect_syntax_diagnostics(&parsed.tree, source_label);
@@ -379,10 +409,11 @@ pub fn document_symbols_document(
 
     let version_id = registry.get_buffer_version(&resource.path).unwrap_or(1);
 
-    let mut parser = parser_for_path(&resource.path)?;
-    let parsed = parser
-        .parse(&content)
-        .map_err(|e| format!("Parse failed: {}", e))?;
+    let parsed = with_parser_for_path(&resource.path, |parser| {
+        parser
+            .parse(&content)
+            .map_err(|e| format!("Parse failed: {}", e))
+    })?;
 
     let symbols = extract_document_symbols(&parsed.tree, &content);
 
@@ -473,10 +504,11 @@ pub fn completion_document(
     }
 
     // Fallback to Tree-sitter document symbols
-    let mut parser = parser_for_path(&resource.path)?;
-    let parsed = parser
-        .parse(&content)
-        .map_err(|e| format!("Parse failed: {}", e))?;
+    let parsed = with_parser_for_path(&resource.path, |parser| {
+        parser
+            .parse(&content)
+            .map_err(|e| format!("Parse failed: {}", e))
+    })?;
 
     let prefix = if request.trigger_character.is_empty() {
         prefix_at_position(&content, request.line, request.column)

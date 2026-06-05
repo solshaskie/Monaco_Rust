@@ -229,7 +229,7 @@
       currentVersionId: 1,
       entries: [],
       tabs: [],
-      isApplyingRemoteEdits: false,
+      remoteEditPaths: new Set(),
       wasmSync: null,
       tokenCache: new Map(),
       foldingCache: new Map(),
@@ -237,6 +237,41 @@
       diagnosticsCache: new Map(),
       symbolsCache: new Map()
     };
+
+    // Cached DOM references to avoid repeated getElementById lookups
+    const dom = {
+      status: null,
+      workerStatus: null,
+      languageStatus: null,
+      fileList: null,
+      tabList: null,
+      currentPath: null,
+      rootLabel: null,
+      container: null,
+    };
+
+    function initDomCache() {
+      dom.status = document.getElementById("status");
+      dom.workerStatus = document.getElementById("worker-status");
+      dom.languageStatus = document.getElementById("language-status");
+      dom.fileList = document.getElementById("file-list");
+      dom.tabList = document.getElementById("tab-list");
+      dom.currentPath = document.getElementById("current-path");
+      dom.rootLabel = document.getElementById("root-label");
+      dom.container = document.getElementById("container");
+    }
+
+    // Batch renderFileList + renderTabs on next animation frame
+    let renderPending = false;
+    function scheduleRender() {
+      if (renderPending) return;
+      renderPending = true;
+      requestAnimationFrame(() => {
+        renderPending = false;
+        renderFileList();
+        renderTabs();
+      });
+    }
 
     const jsKeywords = new Set([
       "break", "case", "catch", "class", "const", "continue", "debugger", "default",
@@ -254,15 +289,15 @@
     }
 
     function setStatus(message) {
-      document.getElementById("status").textContent = message;
+      if (dom.status) dom.status.textContent = message;
     }
 
     function setWorkerStatus(message) {
-      document.getElementById("worker-status").textContent = message;
+      if (dom.workerStatus) dom.workerStatus.textContent = message;
     }
 
     function setLanguageStatus(message) {
-      document.getElementById("language-status").textContent = message;
+      if (dom.languageStatus) dom.languageStatus.textContent = message;
     }
 
     function basename(path) {
@@ -368,7 +403,8 @@
     }
 
     function renderFileList() {
-      const fileList = document.getElementById("file-list");
+      const fileList = dom.fileList;
+      if (!fileList) return;
       fileList.innerHTML = "";
       const entries = state.entries.filter((entry) => !entry.is_directory);
 
@@ -390,11 +426,12 @@
     }
 
     function renderTabs() {
-      const tabList = document.getElementById("tab-list");
+      const tabList = dom.tabList;
+      if (!tabList) return;
       tabList.innerHTML = "";
 
       if (!state.tabs.length) {
-        document.getElementById("current-path").textContent = "No file open";
+        if (dom.currentPath) dom.currentPath.textContent = "No file open";
         return;
       }
 
@@ -423,7 +460,7 @@
         tabList.appendChild(tabButton);
       }
 
-      document.getElementById("current-path").textContent = state.currentPath || "No file open";
+      if (dom.currentPath) dom.currentPath.textContent = state.currentPath || "No file open";
     }
 
     function getOpenTab(path) {
@@ -439,8 +476,7 @@
       state.currentPath = tab.path;
       state.currentVersionId = tab.model.getAlternativeVersionId();
       state.editor.setModel(tab.model);
-      renderTabs();
-      renderFileList();
+      scheduleRender();
       setStatus("Opened " + tab.path);
       probeActiveDocumentFeatures().catch((error) => {
         console.error("Language probe failed", error);
@@ -458,7 +494,7 @@
       const wasActive = tab.path === state.currentPath;
 
       try {
-        await invoke("close_document_json", {
+        await invoke("close_document", {
           request: {
             path: tab.path,
             save_if_dirty: false
@@ -478,21 +514,19 @@
           state.currentPath = "";
           state.currentVersionId = 1;
           state.editor.setModel(null);
-          renderTabs();
-          renderFileList();
+          scheduleRender();
           setLanguageStatus("No active document");
           setStatus("Closed " + tab.path);
           return;
         }
       }
 
-      renderTabs();
-      renderFileList();
+      scheduleRender();
       setStatus("Closed " + tab.path);
     }
 
     async function loadWorkspace() {
-      const roots = await invoke("workspace_roots_json");
+      const roots = await invoke("workspace_roots");
       const root = roots.find((entry) => entry.is_primary) || roots[0];
       if (!root) {
         setStatus("No workspace roots configured");
@@ -500,8 +534,8 @@
       }
 
       state.rootPath = root.path;
-      document.getElementById("root-label").textContent = root.path;
-      const entries = await invoke("list_directory_json", { path: root.path });
+      if (dom.rootLabel) dom.rootLabel.textContent = root.path;
+      const entries = await invoke("list_directory", { path: root.path });
       state.entries = entries;
       renderFileList();
       setStatus("Workspace ready");
@@ -514,7 +548,7 @@
         return;
       }
 
-      const response = await invoke("open_document_json", { path });
+      const response = await invoke("open_document", { path });
       const model = monaco.editor.createModel(
         response.content,
         response.language_id || "plaintext",
@@ -522,7 +556,7 @@
       );
 
       model.onDidChangeContent(function (event) {
-        if (state.isApplyingRemoteEdits || !state.currentPath) {
+        if (state.remoteEditPaths.has(state.currentPath) || !state.currentPath) {
           return;
         }
         const edits = event.changes.map(function (change) {
@@ -536,7 +570,7 @@
             text: change.text
           };
         });
-        invoke("apply_edits_json", {
+        invoke("apply_edits", {
           request: {
             path: state.currentPath,
             edits: edits
@@ -576,8 +610,7 @@
       state.currentPath = response.path;
       state.currentVersionId = response.version_id || 1;
       state.editor.setModel(model);
-      renderTabs();
-      renderFileList();
+      scheduleRender();
       setStatus("Opened " + response.path);
 
       if (response.language_id === "rust" || response.language_id === "javascript" || response.language_id === "typescript") {
@@ -593,6 +626,10 @@
         setLanguageStatus("Language probe failed");
       });
     }
+
+    // Cached worker getters to avoid creating a new worker on every cursor move
+    let cachedTsWorkerGetter = null;
+    let cachedJsWorkerGetter = null;
 
     async function probeActiveDocumentFeatures(position) {
       if (!state.editor) {
@@ -622,10 +659,9 @@
       const probeLabel = probeWord ? probeWord.word : currentLabel;
 
       if (languageId === "javascript" || languageId === "typescript") {
-        const getWorker =
-          languageId === "typescript"
-            ? await monaco.languages.typescript.getTypeScriptWorker()
-            : await monaco.languages.typescript.getJavaScriptWorker();
+        const getWorker = languageId === "typescript"
+          ? (cachedTsWorkerGetter || (cachedTsWorkerGetter = await monaco.languages.typescript.getTypeScriptWorker()))
+          : (cachedJsWorkerGetter || (cachedJsWorkerGetter = await monaco.languages.typescript.getJavaScriptWorker()));
         const worker = await getWorker(model.uri);
         const quickInfo = await worker.getQuickInfoAtPosition(resource, offset);
         const diagnostics =
@@ -659,7 +695,7 @@
     async function fetchTokens(path) {
       if (!path) return;
       try {
-        const response = await invoke("tokenize_document_json", {
+        const response = await invoke("tokenize_document", {
           request: { path: path }
         });
         state.tokenCache.set(path, {
@@ -676,7 +712,7 @@
     async function fetchFoldingRanges(path) {
       if (!path) return;
       try {
-        const response = await invoke("fold_document_json", {
+        const response = await invoke("fold_document", {
           request: { path: path }
         });
         state.foldingCache.set(path, {
@@ -695,7 +731,7 @@
         var cached = state.semanticTokensCache.get(path);
         var response;
         if (cached && cached.result_id) {
-          response = await invoke("semantic_tokens_delta_document_json", {
+          response = await invoke("semantic_tokens_delta_document", {
             request: { path: path, previous_result_id: cached.result_id }
           });
           if (response.data && response.data.length > 0) {
@@ -709,7 +745,7 @@
             console.log("Semantic tokens delta for " + path + ": no changes");
           }
         } else {
-          response = await invoke("semantic_tokens_document_json", {
+          response = await invoke("semantic_tokens_document", {
             request: { path: path }
           });
           state.semanticTokensCache.set(path, {
@@ -726,7 +762,7 @@
     async function fetchDiagnostics(path) {
       if (!path) return;
       try {
-        const response = await invoke("diagnostics_document_json", {
+        const response = await invoke("diagnostics_document", {
           request: { path: path }
         });
         state.diagnosticsCache.set(path, {
@@ -774,7 +810,7 @@
     async function fetchDocumentSymbols(path) {
       if (!path) return;
       try {
-        const response = await invoke("document_symbols_document_json", {
+        const response = await invoke("document_symbols_document", {
           request: { path: path }
         });
         state.symbolsCache.set(path, {
@@ -799,7 +835,7 @@
         return;
       }
 
-      const versionId = await invoke("save_document_json", {
+      const versionId = await invoke("save_document", {
         request: {
           path: state.currentPath,
           content: model.getValue(),
@@ -812,6 +848,7 @@
 
     require.config({ paths: { vs: "/vendor/monaco-editor/min/vs" } });
     require(["vs/editor/editor.main"], function () {
+      initDomCache();
       window.monaco.editor.setTheme("vs-dark");
       window.monaco.editor.defineTheme("vsc-dark", {
         base: "vs-dark",
@@ -822,7 +859,7 @@
         }
       });
 
-      state.editor = window.monaco.editor.create(document.getElementById("container"), {
+      state.editor = window.monaco.editor.create(dom.container, {
         value: "",
         language: "plaintext",
         theme: "vs-dark",
@@ -833,138 +870,7 @@
 
       configureLanguageDefaults(window.monaco);
 
-      window.monaco.languages.registerDocumentSemanticTokensProvider("rust", {
-        getLegend: function () {
-          return {
-            tokenTypes: [
-              "keyword", "identifier", "string", "number",
-              "comment", "operator", "type", "macro"
-            ],
-            tokenModifiers: []
-          };
-        },
-        provideDocumentSemanticTokens: function (model, lastResultId, token) {
-          var path = state.currentPath;
-          var entry = path ? state.semanticTokensCache.get(path) : null;
-          if (!entry) {
-            return { data: new Uint32Array(0) };
-          }
-          return { data: new Uint32Array(entry.data) };
-        },
-        releaseDocumentSemanticTokens: function (resultId) {
-          // No-op
-        }
-      });
-
-      window.monaco.languages.registerHoverProvider("rust", {
-        provideHover: async function (model, position, token) {
-          var path = state.currentPath;
-          if (!path) return null;
-          try {
-            var response = await invoke("hover_document_json", {
-              request: { path: path, line: position.lineNumber, column: position.column }
-            });
-            return {
-              contents: [{ value: response.contents }],
-              range: {
-                startLineNumber: response.start_line,
-                startColumn: response.start_column,
-                endLineNumber: response.end_line,
-                endColumn: response.end_column
-              }
-            };
-          } catch (error) {
-            console.error("hover_document failed", error);
-            return null;
-          }
-        }
-      });
-
-      window.monaco.languages.registerDocumentSymbolProvider("rust", {
-        provideDocumentSymbols: function (model, token) {
-          var path = state.currentPath;
-          var entry = path ? state.symbolsCache.get(path) : null;
-          if (!entry) {
-            return [];
-          }
-          function convert(s) {
-            return {
-              name: s.name,
-              detail: s.detail,
-              kind: window.monaco.languages.SymbolKind[s.kind.charAt(0).toUpperCase() + s.kind.slice(1)] || window.monaco.languages.SymbolKind.Variable,
-              range: {
-                startLineNumber: s.start_line,
-                startColumn: s.start_column,
-                endLineNumber: s.end_line,
-                endColumn: s.end_column
-              },
-              selectionRange: {
-                startLineNumber: s.start_line,
-                startColumn: s.start_column,
-                endLineNumber: s.end_line,
-                endColumn: s.end_column
-              },
-              children: s.children ? s.children.map(convert) : []
-            };
-          }
-          return entry.symbols.map(convert);
-        }
-      });
-
-      window.monaco.languages.registerFoldingRangeProvider("rust", {
-        provideFoldingRanges: function (model, context, token) {
-          var path = state.currentPath;
-          var entry = path ? state.foldingCache.get(path) : null;
-          if (!entry) {
-            return [];
-          }
-          return entry.ranges.map(function (r) {
-            return {
-              start: r.start_line,
-              end: r.end_line,
-              kind: r.kind
-            };
-          });
-        }
-      });
-
-      window.monaco.languages.registerCompletionItemProvider("rust", {
-        triggerCharacters: ["."],
-        provideCompletionItems: async function (model, position, context, token) {
-          var path = state.currentPath;
-          if (!path) return { suggestions: [] };
-          try {
-            var response = await invoke("completion_document_json", {
-              request: {
-                path: path,
-                line: position.lineNumber,
-                column: position.column,
-                trigger_character: context.triggerCharacter || ""
-              }
-            });
-            var suggestions = response.items.map(function (item) {
-              var kind = window.monaco.languages.CompletionItemKind[item.kind.charAt(0).toUpperCase() + item.kind.slice(1)]
-                || window.monaco.languages.CompletionItemKind.Text;
-              return {
-                label: item.label,
-                kind: kind,
-                detail: item.detail,
-                documentation: { value: item.documentation },
-                insertText: item.insert_text,
-                sortText: item.sort_text,
-                filterText: item.filter_text
-              };
-            });
-            return { suggestions: suggestions };
-          } catch (error) {
-            console.error("completion_document failed", error);
-            return { suggestions: [] };
-          }
-        }
-      });
-
-      // Register the same providers for JavaScript and TypeScript
-      ["javascript", "typescript"].forEach(function (lang) {
+      function registerLanguageProviders(lang) {
         window.monaco.languages.registerDocumentSemanticTokensProvider(lang, {
           getLegend: function () {
             return {
@@ -993,7 +899,7 @@
             var path = state.currentPath;
             if (!path) return null;
             try {
-              var response = await invoke("hover_document_json", {
+              var response = await invoke("hover_document", {
                 request: { path: path, line: position.lineNumber, column: position.column }
               });
               return {
@@ -1066,7 +972,7 @@
             var path = state.currentPath;
             if (!path) return { suggestions: [] };
             try {
-              var response = await invoke("completion_document_json", {
+              var response = await invoke("completion_document", {
                 request: {
                   path: path,
                   line: position.lineNumber,
@@ -1094,7 +1000,9 @@
             }
           }
         });
-      });
+      }
+
+      ["rust", "javascript", "typescript"].forEach(registerLanguageProviders);
 
       // Listen for push diagnostics from the backend
       if (window.__TAURI__ && window.__TAURI__.event) {
@@ -1167,7 +1075,7 @@
             };
           });
 
-          state.isApplyingRemoteEdits = true;
+          state.remoteEditPaths.add(payload.path);
           try {
             tab.model.applyEdits(edits);
             state.currentVersionId = payload.version_id;
@@ -1180,7 +1088,7 @@
               " (v" + payload.version_id + ", " + edits.length + " edits, undoing=" +
               payload.is_undoing + ", redoing=" + payload.is_redoing + ")");
           } finally {
-            state.isApplyingRemoteEdits = false;
+            state.remoteEditPaths.delete(payload.path);
           }
         });
 
@@ -1218,11 +1126,16 @@
         }
       });
 
+      let probeDebounceTimer = null;
       state.editor.onDidChangeCursorPosition(function (event) {
-        probeActiveDocumentFeatures(event.position).catch((error) => {
-          console.error("Language probe failed", error);
-          setLanguageStatus("Language probe failed");
-        });
+        if (probeDebounceTimer) clearTimeout(probeDebounceTimer);
+        probeDebounceTimer = setTimeout(function () {
+          probeDebounceTimer = null;
+          probeActiveDocumentFeatures(event.position).catch((error) => {
+            console.error("Language probe failed", error);
+            setLanguageStatus("Language probe failed");
+          });
+        }, 150);
       });
 
       // --- WASM Compute Module (W1.1) ---
@@ -1240,7 +1153,7 @@
             tokenize: (src, lang) => glue.tokenize(src, lang),
             diff: (old, neu) => glue.computeDiff(old, neu),
             layout: (src, w) => glue.computeLayout(src, w),
-            visibleLines: (src, lh, st, vh) => glue.computeVisibleLines(src, lh, st, vh),
+            visibleLines: (total, lh, st, vh) => glue.computeVisibleLines(total, lh, st, vh),
             countLines: (src) => glue.countLines(src),
           };
 

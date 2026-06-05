@@ -69,16 +69,18 @@ pub fn compute_layout(source: &str, line_width: usize) -> Result<String, JsValue
         .map_err(|e| JsValue::from_str(&format!("serialization error: {}", e)))
 }
 
-/// Compute viewport-visible lines given a scroll offset and viewport height.
+/// Compute viewport-visible lines given total line count, scroll offset and viewport height.
 /// Returns { "start_line": 0, "end_line": 0 }
+/// Callers should cache `total_lines` (e.g. from `count_lines`) to avoid
+/// re-scanning the source on every scroll event.
 #[wasm_bindgen]
 pub fn compute_visible_lines(
-    source: &str,
+    total_lines: usize,
     line_height_px: f64,
     scroll_top_px: f64,
     viewport_height_px: f64,
 ) -> Result<String, JsValue> {
-    let visible = layout::compute_visible_lines(source, line_height_px, scroll_top_px, viewport_height_px);
+    let visible = layout::compute_visible_lines(total_lines, line_height_px, scroll_top_px, viewport_height_px);
     serde_json::to_string(&visible)
         .map_err(|e| JsValue::from_str(&format!("serialization error: {}", e)))
 }
@@ -305,6 +307,12 @@ pub fn clear_token_cache() {
 #[wasm_bindgen]
 pub fn token_cache_len() -> usize {
     cache::len()
+}
+
+/// Return approximate total cached bytes.
+#[wasm_bindgen]
+pub fn token_cache_total_bytes() -> usize {
+    cache::total_bytes()
 }
 
 // ---------------------------------------------------------------------------

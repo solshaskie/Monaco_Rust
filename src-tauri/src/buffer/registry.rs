@@ -1,6 +1,7 @@
 use crate::buffer::{ContentChange, ModelContentChangedEvent, TextBuffer};
+use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 /// A registry that manages multiple text buffers by their resource URI.
 ///
@@ -65,7 +66,7 @@ impl BufferRegistry {
         self.buffers
             .remove(resource)
             .and_then(|arc| Arc::try_unwrap(arc).ok())
-            .and_then(|rwlock| rwlock.into_inner().ok())
+            .map(|rwlock| rwlock.into_inner())
     }
 
     /// Returns the number of open buffers.
@@ -85,7 +86,7 @@ impl BufferRegistry {
         change: &ContentChange,
     ) -> Option<ModelContentChangedEvent> {
         let buffer = self.buffers.get(resource)?;
-        let mut buffer = buffer.write().ok()?;
+        let mut buffer = buffer.write();
         buffer.apply_change(change)
     }
 
@@ -101,7 +102,7 @@ impl BufferRegistry {
             .buffers
             .get(resource)
             .ok_or_else(|| format!("No buffer found for resource: {}", resource))?;
-        let buffer = buffer.read().map_err(|e| e.to_string())?;
+        let mut buffer = buffer.write();
         let current_version = buffer.version_id();
         if current_version != expected_version {
             return Err(format!(
@@ -109,9 +110,6 @@ impl BufferRegistry {
                 expected_version, current_version
             ));
         }
-        drop(buffer);
-        let buffer = self.buffers.get(resource).unwrap();
-        let mut buffer = buffer.write().map_err(|e| e.to_string())?;
         Ok(buffer.apply_change(change))
     }
 
@@ -122,14 +120,14 @@ impl BufferRegistry {
         content: &str,
     ) -> Option<ModelContentChangedEvent> {
         let buffer = self.buffers.get(resource)?;
-        let mut buffer = buffer.write().ok()?;
+        let mut buffer = buffer.write();
         buffer.set_value(content)
     }
 
     /// Gets the current content of a buffer.
     pub fn get_buffer_content(&self, resource: &str) -> Option<String> {
         let buffer = self.buffers.get(resource)?;
-        let buffer = buffer.read().ok()?;
+        let buffer = buffer.read();
         Some(buffer.get_value())
     }
 
@@ -141,21 +139,21 @@ impl BufferRegistry {
         end_line: usize,
     ) -> Option<String> {
         let buffer = self.buffers.get(resource)?;
-        let buffer = buffer.read().ok()?;
+        let buffer = buffer.read();
         Some(buffer.get_value_in_line_range(start_line, end_line))
     }
 
     /// Gets the dirty line ranges from the most recent edit.
     pub fn get_buffer_dirty_lines(&self, resource: &str) -> Option<Vec<super::LineRange>> {
         let buffer = self.buffers.get(resource)?;
-        let buffer = buffer.read().ok()?;
+        let buffer = buffer.read();
         Some(buffer.dirty_line_ranges().to_vec())
     }
 
     /// Clears dirty line tracking for a buffer.
     pub fn clear_buffer_dirty_lines(&self, resource: &str) -> Option<()> {
         let buffer = self.buffers.get(resource)?;
-        let mut buffer = buffer.write().ok()?;
+        let mut buffer = buffer.write();
         buffer.clear_dirty_lines();
         Some(())
     }
@@ -163,28 +161,28 @@ impl BufferRegistry {
     /// Gets the current content of a buffer as bytes.
     pub fn get_buffer_content_bytes(&self, resource: &str) -> Option<Vec<u8>> {
         let buffer = self.buffers.get(resource)?;
-        let buffer = buffer.read().ok()?;
+        let buffer = buffer.read();
         Some(buffer.get_value_bytes())
     }
 
     /// Gets the version ID of a buffer.
     pub fn get_buffer_version(&self, resource: &str) -> Option<u64> {
         let buffer = self.buffers.get(resource)?;
-        let buffer = buffer.read().ok()?;
+        let buffer = buffer.read();
         Some(buffer.version_id())
     }
 
     /// Checks if a buffer is dirty.
     pub fn is_buffer_dirty(&self, resource: &str) -> Option<bool> {
         let buffer = self.buffers.get(resource)?;
-        let buffer = buffer.read().ok()?;
+        let buffer = buffer.read();
         Some(buffer.is_dirty())
     }
 
     /// Marks a buffer as saved.
     pub fn mark_buffer_saved(&self, resource: &str) -> Option<()> {
         let buffer = self.buffers.get(resource)?;
-        let mut buffer = buffer.write().ok()?;
+        let mut buffer = buffer.write();
         buffer.mark_as_saved();
         Some(())
     }
@@ -192,36 +190,54 @@ impl BufferRegistry {
     /// Undoes the last operation on a buffer.
     pub fn undo(&self, resource: &str) -> Option<ModelContentChangedEvent> {
         let buffer = self.buffers.get(resource)?;
-        let mut buffer = buffer.write().ok()?;
+        let mut buffer = buffer.write();
         buffer.undo()
     }
 
     /// Redoes the last undone operation on a buffer.
     pub fn redo(&self, resource: &str) -> Option<ModelContentChangedEvent> {
         let buffer = self.buffers.get(resource)?;
-        let mut buffer = buffer.write().ok()?;
+        let mut buffer = buffer.write();
         buffer.redo()
     }
 
     /// Checks if a buffer can undo.
     pub fn can_undo(&self, resource: &str) -> Option<bool> {
         let buffer = self.buffers.get(resource)?;
-        let buffer = buffer.read().ok()?;
+        let buffer = buffer.read();
         Some(buffer.can_undo())
     }
 
     /// Checks if a buffer can redo.
     pub fn can_redo(&self, resource: &str) -> Option<bool> {
         let buffer = self.buffers.get(resource)?;
-        let buffer = buffer.read().ok()?;
+        let buffer = buffer.read();
         Some(buffer.can_redo())
     }
 
     /// Gets a snapshot of a buffer.
     pub fn get_buffer_snapshot(&self, resource: &str) -> Option<crate::buffer::TextBufferSnapshot> {
         let buffer = self.buffers.get(resource)?;
-        let buffer = buffer.read().ok()?;
+        let buffer = buffer.read();
         Some(buffer.get_snapshot())
+    }
+
+    /// Gets the version lineage (historical snapshots) of a buffer.
+    pub fn get_buffer_lineage(&self, resource: &str) -> Option<Vec<crate::buffer::TextBufferSnapshot>> {
+        let buffer = self.buffers.get(resource)?;
+        let buffer = buffer.read();
+        Some(buffer.get_lineage().clone())
+    }
+
+    /// Gets a snapshot at a specific version ID.
+    pub fn get_buffer_snapshot_at_version(
+        &self,
+        resource: &str,
+        version_id: u64,
+    ) -> Option<crate::buffer::TextBufferSnapshot> {
+        let buffer = self.buffers.get(resource)?;
+        let buffer = buffer.read();
+        buffer.get_snapshot_at_version(version_id).cloned()
     }
 
     /// Clears all buffers from the registry.
@@ -403,7 +419,7 @@ mod tests {
         assert!(snapshot.is_some());
 
         let snapshot = snapshot.unwrap();
-        assert_eq!(snapshot.content_utf8, b"content!");
+        assert_eq!(snapshot.content_utf8.as_ref(), b"content!");
         assert_eq!(snapshot.version_id, 2);
         assert!(snapshot.is_dirty);
     }

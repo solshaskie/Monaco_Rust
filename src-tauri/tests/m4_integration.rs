@@ -19,7 +19,10 @@ fn file_uri(path: &Path) -> file::Uri {
 
 #[test]
 fn save_as_and_list_directory_round_trip() {
-    let temp_dir = std::env::temp_dir().join("monaco-tauri-m4-integration");
+    let temp_dir = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join("test-temp-m4-integration");
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(&temp_dir).unwrap();
 
@@ -62,10 +65,13 @@ fn save_as_and_list_directory_round_trip() {
         b"const renamed = true;\n".to_vec()
     );
 
-    let listing = host_handlers::list_directory(host::ListDirectoryRequest {
-        resource: Some(file_uri(&temp_dir)),
-        include_file_stats: true,
-    })
+    let listing = host_handlers::list_directory(
+        &state,
+        host::ListDirectoryRequest {
+            resource: Some(file_uri(&temp_dir)),
+            include_file_stats: true,
+        },
+    )
     .unwrap();
 
     let names: Vec<String> = listing
@@ -116,7 +122,10 @@ fn tauri_dist_contains_shell_and_worker_assets() {
 
 #[test]
 fn end_to_end_edit_undo_redo_save_workflow() {
-    let temp_dir = std::env::temp_dir().join("monaco-tauri-e2e-workflow");
+    let temp_dir = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join("test-temp-e2e-workflow");
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -223,7 +232,10 @@ fn end_to_end_edit_undo_redo_save_workflow() {
 
 #[test]
 fn multi_view_buffer_sync_via_registry() {
-    let temp_dir = std::env::temp_dir().join("monaco-tauri-multi-view");
+    let temp_dir = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join("test-temp-multi-view");
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(&temp_dir).unwrap();
 
@@ -300,41 +312,65 @@ fn multi_view_buffer_sync_via_registry() {
 
 #[test]
 fn security_permission_denial_blocks_operations() {
-    let temp_dir = std::env::temp_dir().join("monaco-tauri-security");
-    let _ = std::fs::remove_dir_all(&temp_dir);
-    std::fs::create_dir_all(&temp_dir).unwrap();
+    let workspace_dir = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join("test-temp-security-workspace");
+    let outside_dir = std::env::temp_dir().join("test-temp-security-outside");
+    let _ = std::fs::remove_dir_all(&workspace_dir);
+    let _ = std::fs::remove_dir_all(&outside_dir);
+    std::fs::create_dir_all(&workspace_dir).unwrap();
+    std::fs::create_dir_all(&outside_dir).unwrap();
 
-    let path = temp_dir.join("secret.txt");
-    std::fs::write(&path, "secret").unwrap();
-
+    // Set workspace root
     let state = MonacoHostState::new();
+    host_handlers::set_primary_workspace_root(
+        &state,
+        host::SetPrimaryWorkspaceRootRequest {
+            resource: Some(file_uri(&workspace_dir)),
+        },
+    )
+    .unwrap();
 
-    // Revoke read permission for the default user principal
-    state
-        .capabilities()
-        .revoke("user", monaco_tauri::security::Permission::ReadFile);
-
-    // Open should now fail
-    let result = host_handlers::open_document(
+    // File inside workspace should succeed
+    let inside_path = workspace_dir.join("inside.txt");
+    std::fs::write(&inside_path, "inside").unwrap();
+    let inside_result = host_handlers::open_document(
         &state,
         host::OpenDocumentRequest {
-            resource: Some(file_uri(&path)),
+            resource: Some(file_uri(&inside_path)),
             create_if_missing: false,
             preferred_language_id: String::new(),
         },
     );
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("permission denied"));
+    assert!(inside_result.is_ok(), "file inside workspace should open");
 
-    // Re-grant for cleanup / other tests
-    state
-        .capabilities()
-        .grant("user", monaco_tauri::security::Permission::ReadFile);
+    // File outside workspace should fail due to path containment
+    let outside_path = outside_dir.join("secret.txt");
+    std::fs::write(&outside_path, "secret").unwrap();
+    let outside_result = host_handlers::open_document(
+        &state,
+        host::OpenDocumentRequest {
+            resource: Some(file_uri(&outside_path)),
+            create_if_missing: false,
+            preferred_language_id: String::new(),
+        },
+    );
+    assert!(outside_result.is_err());
+    let err = outside_result.unwrap_err();
+    assert!(
+        err.contains("not under any workspace root"),
+        "expected path containment error, got: {}",
+        err
+    );
 }
 
 #[test]
 fn security_sandbox_blocks_oversized_file() {
-    let temp_dir = std::env::temp_dir().join("monaco-tauri-sandbox");
+    let temp_dir = std::env::current_dir()
+        .unwrap()
+        .join("target")
+        .join("test-temp-sandbox");
     let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(&temp_dir).unwrap();
 

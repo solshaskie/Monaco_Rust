@@ -190,15 +190,15 @@ export async function computeLayout(source, lineWidth = 80) {
 
 /**
  * Compute viewport-visible lines.
- * @param {string} source
+ * @param {number} totalLines — cached total line count (from countLines)
  * @param {number} lineHeightPx
  * @param {number} scrollTopPx
  * @param {number} viewportHeightPx
  * @returns {Promise<{start_line, end_line}>}
  */
-export async function computeVisibleLines(source, lineHeightPx, scrollTopPx, viewportHeightPx) {
+export async function computeVisibleLines(totalLines, lineHeightPx, scrollTopPx, viewportHeightPx) {
   const mod = await initWasmCompute();
-  const json = mod.compute_visible_lines(source, lineHeightPx, scrollTopPx, viewportHeightPx);
+  const json = mod.compute_visible_lines(totalLines, lineHeightPx, scrollTopPx, viewportHeightPx);
   return JSON.parse(json);
 }
 

@@ -7,14 +7,39 @@
  */
 
 function applyLineDelta(content, delta) {
-  const lines = content.split('\n');
-  const replacement = delta.text.length > 0 ? delta.text.split('\n') : [];
-  lines.splice(delta.start_line, delta.end_line - delta.start_line, ...replacement);
-  return lines.join('\n');
+  // Incremental splice: find byte offsets of start/end lines instead of
+  // splitting the entire file into an array. O(replaced lines) vs O(total lines).
+  let startOffset = 0;
+  for (let i = 0; i < delta.start_line && startOffset < content.length; i++) {
+    const nl = content.indexOf('\n', startOffset);
+    if (nl === -1) {
+      startOffset = content.length;
+      break;
+    }
+    startOffset = nl + 1;
+  }
+
+  let endOffset = startOffset;
+  const deleteCount = delta.end_line - delta.start_line;
+  for (let i = 0; i < deleteCount && endOffset < content.length; i++) {
+    const nl = content.indexOf('\n', endOffset);
+    if (nl === -1) {
+      endOffset = content.length;
+      break;
+    }
+    endOffset = nl + 1;
+  }
+
+  return content.slice(0, startOffset) + delta.text + content.slice(endOffset);
 }
 
 function countLines(content) {
-  return content.split('\n').length;
+  if (!content) return 0;
+  let count = 1;
+  for (let i = 0; i < content.length; i++) {
+    if (content[i] === '\n') count++;
+  }
+  return count;
 }
 
 const DEFAULT_HEARTBEAT_MS = 100;

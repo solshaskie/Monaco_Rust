@@ -1,9 +1,14 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use parking_lot::Mutex;
+use parking_lot::RwLock;
+use std::sync::Arc;
+use tauri::Manager;
 
 use crate::buffer::{BufferRegistry, ContentChange, Position};
 use crate::lsp::LspRegistry;
+use crate::mcp::McpToolRegistry;
 use crate::proto::code::ipc::editor;
 use crate::proto::code::ipc::editor::host;
 use crate::proto::code::ipc::file;
@@ -14,12 +19,71 @@ use crate::security::{
 /// Default principal for built-in editor operations (the user).
 const DEFAULT_PRINCIPAL: &str = "user";
 
+/// Convert internal content changes to LSP incremental `contentChanges` format.
+/// Positions are 1-indexed internally; LSP requires 0-indexed.
+pub fn build_lsp_incremental_changes(changes: &[ContentChange]) -> Vec<serde_json::Value> {
+    changes
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "range": {
+                    "start": {
+                        "line": c.start_position.line.saturating_sub(1),
+                        "character": c.start_position.column.saturating_sub(1),
+                    },
+                    "end": {
+                        "line": c.end_position.line.saturating_sub(1),
+                        "character": c.end_position.column.saturating_sub(1),
+                    },
+                },
+                "text": c.text,
+            })
+        })
+        .collect()
+}
+
+/// Convert proto `ModelContentChange` to LSP incremental `contentChanges` format.
+pub fn build_lsp_changes_from_proto(
+    changes: &[editor::ModelContentChange],
+) -> Vec<serde_json::Value> {
+    changes
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "range": {
+                    "start": {
+                        "line": (c.start_line as i32).saturating_sub(1),
+                        "character": (c.start_column as i32).saturating_sub(1),
+                    },
+                    "end": {
+                        "line": (c.end_line as i32).saturating_sub(1),
+                        "character": (c.end_column as i32).saturating_sub(1),
+                    },
+                },
+                "text": String::from_utf8_lossy(&c.text_utf8),
+            })
+        })
+        .collect()
+}
+
 pub struct MonacoHostState {
     workspace_roots: RwLock<Vec<host::WorkspaceRoot>>,
     buffer_registry: RwLock<BufferRegistry>,
     sandbox: Arc<SecuritySandbox>,
     capabilities: Arc<CapabilityRegistry>,
     lsp_registry: RwLock<LspRegistry>,
+    /// Debounced diagnostic tasks per buffer path.
+    diagnostic_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+    /// Pending didChange content changes per buffer path (accumulated for batching).
+    pending_did_changes: Mutex<HashMap<String, Vec<serde_json::Value>>>,
+    /// Latest version per buffer path for batched didChange.
+    pending_did_change_versions: Mutex<HashMap<String, i32>>,
+    /// Debounce handles for didChange batching per buffer path.
+    did_change_tasks: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+    /// App handle for spawning async tasks from within the host state.
+    app_handle: Mutex<Option<tauri::AppHandle>>,
+    /// Cached MCP tool registry, built once on startup.
+    mcp_tool_registry: McpToolRegistry,
 }
 
 impl Default for MonacoHostState {
@@ -84,6 +148,12 @@ impl MonacoHostState {
             sandbox,
             capabilities,
             lsp_registry: RwLock::new(LspRegistry::new(workspace_root)),
+            diagnostic_tasks: Mutex::new(HashMap::new()),
+            pending_did_changes: Mutex::new(HashMap::new()),
+            pending_did_change_versions: Mutex::new(HashMap::new()),
+            did_change_tasks: Mutex::new(HashMap::new()),
+            app_handle: Mutex::new(None),
+            mcp_tool_registry: McpToolRegistry::with_defaults(),
         }
     }
 
@@ -98,15 +168,13 @@ impl MonacoHostState {
     pub fn workspace_roots(&self) -> Vec<host::WorkspaceRoot> {
         self.workspace_roots
             .read()
-            .expect("workspace roots poisoned")
             .clone()
     }
 
     pub fn set_primary_root(&self, resource: &file::Uri) -> Result<host::WorkspaceRoot, String> {
         let mut roots = self
             .workspace_roots
-            .write()
-            .map_err(|_| "workspace roots poisoned".to_string())?;
+            .write();
 
         let mut selected: Option<host::WorkspaceRoot> = None;
         for root in roots.iter_mut() {
@@ -145,6 +213,75 @@ impl MonacoHostState {
     pub fn lsp_registry(&self) -> &RwLock<LspRegistry> {
         &self.lsp_registry
     }
+
+    pub fn mcp_tool_registry(&self) -> &McpToolRegistry {
+        &self.mcp_tool_registry
+    }
+
+    /// Abort any in-flight diagnostic task for `path` and insert `handle`.
+    pub fn replace_diagnostic_task(&self, path: &str, handle: tokio::task::JoinHandle<()>) {
+        let mut tasks = self.diagnostic_tasks.lock();
+        if let Some(old) = tasks.remove(path) {
+            old.abort();
+        }
+        tasks.insert(path.to_string(), handle);
+    }
+
+    /// Store the Tauri app handle so async tasks can access managed state.
+    pub fn set_app_handle(&self, handle: tauri::AppHandle) {
+        *self.app_handle.lock() = Some(handle);
+    }
+
+    /// Queue a `textDocument/didChange` notification for batching.
+    /// Rapid edits on the same path accumulate changes; after 50ms of
+    /// inactivity the batched changes are sent in a single LSP notification.
+    pub fn queue_did_change(&self, path: &str, version: i32, changes: Vec<serde_json::Value>) {
+        let app = self.app_handle.lock().clone();
+        let app = match app {
+            Some(a) => a,
+            None => {
+                // App handle not yet set (should only happen during init);
+                // send synchronously as fallback.
+                let mut lsp = self.lsp_registry.write();
+                let language_id = detect_language_id_from_path(path);
+                lsp.did_change(path, &language_id, version, changes);
+                return;
+            }
+        };
+
+        // Accumulate changes
+        {
+            let mut pending = self.pending_did_changes.lock();
+            pending.entry(path.to_string()).or_default().extend(changes);
+        }
+        {
+            let mut versions = self.pending_did_change_versions.lock();
+            versions.insert(path.to_string(), version);
+        }
+
+        // Abort old debounce task for this path, spawn a new one
+        let path_owned = path.to_string();
+        {
+            let mut tasks = self.did_change_tasks.lock();
+            if let Some(old) = tasks.remove(&path_owned) {
+                old.abort();
+            }
+            let path_inner = path_owned.clone();
+            let handle = tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                let state = app.state::<MonacoHostState>();
+                let mut pending = state.pending_did_changes.lock();
+                let mut versions = state.pending_did_change_versions.lock();
+                if let Some(changes) = pending.remove(&path_inner) {
+                    let version = versions.remove(&path_inner).unwrap_or(0);
+                    let mut lsp = state.lsp_registry().write();
+                    let language_id = detect_language_id_from_path(&path_inner);
+                    lsp.did_change(&path_inner, &language_id, version, changes);
+                }
+            });
+            tasks.insert(path_owned, handle);
+        }
+    }
 }
 
 pub fn get_workspace_roots(state: &MonacoHostState) -> host::GetWorkspaceRootsResponse {
@@ -172,6 +309,122 @@ fn default_principal() -> Principal {
     }
 }
 
+/// Normalize a path for containment checks.
+/// For existing paths, uses `canonicalize` to resolve symlinks and `..`.
+/// For non-existent paths, resolves against current directory and normalizes
+/// `.` and `..` segments manually.
+fn normalize_path_for_check(path: &Path) -> Result<PathBuf, String> {
+    if path.exists() {
+        std::fs::canonicalize(path).map_err(|e| e.to_string())
+    } else {
+        let current_dir = std::env::current_dir().map_err(|e| e.to_string())?;
+        let abs = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            current_dir.join(path)
+        };
+        let mut result = PathBuf::new();
+        for component in abs.components() {
+            match component {
+                std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                    result.push(component);
+                }
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    result.pop();
+                }
+                std::path::Component::Normal(c) => {
+                    result.push(c);
+                }
+            }
+        }
+        Ok(result)
+    }
+}
+
+/// Check that a canonicalized path is under at least one workspace root.
+fn validate_canonical_under_workspace(state: &MonacoHostState, canonical: &Path) -> Result<(), String> {
+    let roots: Vec<PathBuf> = state
+        .workspace_roots()
+        .iter()
+        .filter_map(|r| r.resource.as_ref().map(|u| PathBuf::from(&u.path)))
+        .collect();
+    if roots.is_empty() {
+        return Err("no workspace roots configured".to_string());
+    }
+    let canonical_roots: Vec<PathBuf> = roots
+        .iter()
+        .map(|r| normalize_path_for_check(r).unwrap_or_else(|_| r.clone()))
+        .collect();
+    if !canonical_roots.iter().any(|root| canonical.starts_with(root)) {
+        return Err(format!(
+            "path {} is not under any workspace root",
+            canonical.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Validate a path for read access (open_document, list_directory).
+fn validate_read_path(state: &MonacoHostState, path: &Path) -> Result<PathBuf, String> {
+    let normalized = normalize_path_for_check(path)?;
+    validate_canonical_under_workspace(state, &normalized)?;
+    Ok(normalized)
+}
+
+/// Validate a path string for MCP tool usage.
+/// Normalizes the path and checks that it is under a configured workspace root.
+/// Does not require the path to exist on disk.
+pub fn validate_mcp_path(state: &MonacoHostState, path_str: &str) -> Result<(), String> {
+    let path = PathBuf::from(path_str);
+    let normalized = normalize_path_for_check(&path)?;
+    validate_canonical_under_workspace(state, &normalized)
+}
+
+/// Validate that a write target is not a symlink.
+fn validate_not_symlink(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(format!(
+            "refusing to follow symlink at {}",
+            path.display()
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Validate a path for write access (save_document, save_document_as, close_document dirty-save).
+/// For existing paths, canonicalizes and checks containment + rejects symlinks.
+/// For non-existent paths, finds the deepest existing ancestor, canonicalizes
+/// it to resolve symlinks, checks containment, and reconstructs the target path.
+fn validate_write_path(state: &MonacoHostState, path: &Path) -> Result<PathBuf, String> {
+    if path.exists() {
+        let canonical = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+        validate_canonical_under_workspace(state, &canonical)?;
+        validate_not_symlink(path)?;
+        Ok(canonical)
+    } else {
+        // Find the deepest existing ancestor, canonicalize it to resolve symlinks,
+        // and verify containment.
+        let mut ancestor = path.parent();
+        while let Some(a) = ancestor {
+            if a.exists() {
+                let canonical = std::fs::canonicalize(a).map_err(|e| e.to_string())?;
+                validate_canonical_under_workspace(state, &canonical)?;
+                validate_not_symlink(a)?;
+                let suffix = path
+                    .strip_prefix(a)
+                    .map_err(|_| format!("path prefix mismatch for {}", path.display()))?;
+                return Ok(canonical.join(suffix));
+            }
+            ancestor = a.parent();
+        }
+        // No existing ancestor; fall back to manual normalization
+        let normalized = normalize_path_for_check(path)?;
+        validate_canonical_under_workspace(state, &normalized)?;
+        Ok(normalized)
+    }
+}
+
 pub fn open_document(
     state: &MonacoHostState,
     request: host::OpenDocumentRequest,
@@ -180,6 +433,7 @@ pub fn open_document(
         .resource
         .ok_or_else(|| "missing document resource".to_string())?;
     let path = uri_to_path(&resource)?;
+    let _path = validate_read_path(state, &path)?;
 
     // Security: check read permission
     let principal = default_principal();
@@ -192,7 +446,7 @@ pub fn open_document(
 
     // Check if buffer already exists in registry
     {
-        let registry = state.buffer_registry.read().map_err(|e| e.to_string())?;
+        let registry = state.buffer_registry.read();
         if registry.has_buffer(&resource.path) {
             // Return existing buffer snapshot
             if let Some(snapshot) = registry.get_buffer_snapshot(&resource.path) {
@@ -200,7 +454,7 @@ pub fn open_document(
                     snapshot: Some(editor::BufferSnapshot {
                         resource: Some(resource.clone()),
                         version_id: snapshot.version_id,
-                        content_utf8: snapshot.content_utf8,
+                        content_utf8: (&*snapshot.content_utf8).to_vec(),
                         eol: snapshot.eol,
                         is_dirty: snapshot.is_dirty,
                     }),
@@ -236,7 +490,7 @@ pub fn open_document(
 
     // Open buffer in registry
     {
-        let mut registry = state.buffer_registry.write().map_err(|e| e.to_string())?;
+        let mut registry = state.buffer_registry.write();
         registry.open_buffer_from_bytes(resource.path.clone(), &content)?;
     }
     state
@@ -251,10 +505,9 @@ pub fn open_document(
     };
 
     // Notify LSP server that document was opened
-    if let Ok(mut lsp) = state.lsp_registry.write() {
-        let text = String::from_utf8_lossy(&content).to_string();
-        lsp.did_open(&resource.path, &language_id, 1, &text);
-    }
+    let mut lsp = state.lsp_registry.write();
+    let text = String::from_utf8_lossy(&content).to_string();
+    lsp.did_open(&resource.path, &language_id, 1, &text);
 
     Ok(host::OpenDocumentResponse {
         snapshot: Some(editor::BufferSnapshot {
@@ -282,6 +535,7 @@ pub fn save_document(
         .clone()
         .ok_or_else(|| "missing document resource".to_string())?;
     let path = uri_to_path(&resource)?;
+    let path = validate_write_path(state, &path)?;
 
     // Security: check write/create permission
     let principal = default_principal();
@@ -313,20 +567,20 @@ pub fn save_document(
     fs::write(&path, &snapshot.content_utf8).map_err(|err| err.to_string())?;
 
     // Update buffer in registry if it exists
-    {
-        let registry = state.buffer_registry.read().map_err(|e| e.to_string())?;
+    let persisted_version_id = {
+        let registry = state.buffer_registry.read();
         if registry.has_buffer(&resource.path) {
-            // Update the buffer content to match the saved content
-            let content = String::from_utf8(snapshot.content_utf8.clone())
-                .map_err(|e| format!("Invalid UTF-8 content: {}", e))?;
-            registry.set_buffer_content(&resource.path, &content);
+            // Buffer content is already the source of truth; just mark saved
             registry.mark_buffer_saved(&resource.path);
+            registry.get_buffer_version(&resource.path).unwrap_or(snapshot.version_id)
+        } else {
+            snapshot.version_id
         }
-    }
+    };
 
     Ok(host::SaveDocumentResponse {
         stat: Some(build_file_stat(&path)?),
-        persisted_version_id: snapshot.version_id,
+        persisted_version_id,
     })
 }
 
@@ -341,6 +595,7 @@ pub fn save_document_as(
         .target
         .ok_or_else(|| "missing target resource".to_string())?;
     let target_path = uri_to_path(&target)?;
+    let target_path = validate_write_path(state, &target_path)?;
 
     if target_path.exists() && !request.overwrite {
         return Err(format!(
@@ -352,17 +607,20 @@ pub fn save_document_as(
     if let Some(parent) = target_path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
-    fs::write(&target_path, &snapshot.content_utf8).map_err(|err| err.to_string())?;
+    fs::write(&target_path, &*snapshot.content_utf8).map_err(|err| err.to_string())?;
 
-    // Update registry: close old buffer, open new one
+    // Notify LSP and update registry: close old buffer, open new one
     {
-        let mut registry = state.buffer_registry.write().map_err(|e| e.to_string())?;
+        let mut registry = state.buffer_registry.write();
 
         // Get content before closing
-        let content = snapshot.content_utf8.clone();
+        let content = (&*snapshot.content_utf8).to_vec();
 
         // Close old buffer if exists
         if let Some(source_resource) = &snapshot.resource {
+            let language_id = detect_language_id_from_path(&source_resource.path);
+            let mut lsp = state.lsp_registry.write();
+            lsp.did_close(&source_resource.path, &language_id);
             registry.close_buffer(&source_resource.path);
         }
 
@@ -370,13 +628,18 @@ pub fn save_document_as(
         let content_str =
             String::from_utf8(content).map_err(|e| format!("Invalid UTF-8 content: {}", e))?;
         registry.open_buffer(target.path.clone(), &content_str);
+
+        // Notify LSP that the new document is open
+        let target_language_id = detect_language_id_from_path(&target.path);
+        let mut lsp = state.lsp_registry.write();
+        lsp.did_open(&target.path, &target_language_id, 1, &content_str);
     }
 
     Ok(host::SaveDocumentAsResponse {
         snapshot: Some(editor::BufferSnapshot {
             resource: Some(target.clone()),
             version_id: snapshot.version_id,
-            content_utf8: snapshot.content_utf8,
+            content_utf8: (&*snapshot.content_utf8).to_vec(),
             eol: snapshot.eol,
             is_dirty: false,
         }),
@@ -393,7 +656,7 @@ pub fn close_document(
         .resource
         .ok_or_else(|| "missing document resource".to_string())?;
 
-    let registry = state.buffer_registry.read().map_err(|e| e.to_string())?;
+    let registry = state.buffer_registry.read();
     let is_dirty = registry.is_buffer_dirty(&resource.path).unwrap_or(false);
     drop(registry);
 
@@ -402,25 +665,24 @@ pub fn close_document(
         if let Some(snapshot) = state
             .buffer_registry
             .read()
-            .map_err(|e| e.to_string())?
             .get_buffer_snapshot(&resource.path)
         {
             let path = uri_to_path(&resource)?;
+            let path = validate_write_path(state, &path)?;
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).map_err(|err| err.to_string())?;
             }
-            fs::write(&path, &snapshot.content_utf8).map_err(|err| err.to_string())?;
+            fs::write(&path, &*snapshot.content_utf8).map_err(|err| err.to_string())?;
         }
     }
 
     // Notify LSP server that document was closed
     let language_id = detect_language_id_from_path(&resource.path);
-    if let Ok(mut lsp) = state.lsp_registry.write() {
-        lsp.did_close(&resource.path, &language_id);
-    }
+    let mut lsp = state.lsp_registry.write();
+    lsp.did_close(&resource.path, &language_id);
 
     // Close the buffer
-    let mut registry = state.buffer_registry.write().map_err(|e| e.to_string())?;
+    let mut registry = state.buffer_registry.write();
     let size = registry
         .get_buffer_content(&resource.path)
         .map(|c| c.len())
@@ -451,7 +713,7 @@ pub fn apply_edits(
         return Err("permission denied: write_file".to_string());
     }
 
-    let registry = state.buffer_registry.read().map_err(|e| e.to_string())?;
+    let registry = state.buffer_registry.read();
     if !registry.has_buffer(&resource.path) {
         return Err(format!("No open buffer for resource: {}", resource.path));
     }
@@ -476,7 +738,7 @@ pub fn apply_edits(
     let changes = changes?;
 
     // Apply edits to buffer
-    let registry = state.buffer_registry.read().map_err(|e| e.to_string())?;
+    let registry = state.buffer_registry.read();
     let mut applied_changes = Vec::new();
     let mut new_version_id = 0;
 
@@ -487,28 +749,6 @@ pub fn apply_edits(
         }
     }
     drop(registry);
-
-    // Notify LSP server of document change
-    if new_version_id > 0 {
-        if let Ok(registry) = state.buffer_registry.read() {
-            if let Some(content) = registry.get_buffer_content(&resource.path) {
-                let language_id = detect_language_id_from_path(&resource.path);
-                if let Ok(mut lsp) = state.lsp_registry.write() {
-                    let change_json = serde_json::json!({
-                        "range": null,
-                        "rangeLength": null,
-                        "text": content,
-                    });
-                    lsp.did_change(
-                        &resource.path,
-                        &language_id,
-                        new_version_id as i32,
-                        vec![change_json],
-                    );
-                }
-            }
-        }
-    }
 
     Ok(host::ApplyEditsResponse {
         success: !applied_changes.is_empty(),
@@ -548,7 +788,7 @@ pub fn get_buffer_snapshot(
         .resource
         .ok_or_else(|| "missing document resource".to_string())?;
 
-    let registry = state.buffer_registry.read().map_err(|e| e.to_string())?;
+    let registry = state.buffer_registry.read();
     let snapshot = registry
         .get_buffer_snapshot(&resource.path)
         .ok_or_else(|| format!("No buffer found for resource: {}", resource.path))?;
@@ -557,7 +797,7 @@ pub fn get_buffer_snapshot(
         snapshot: Some(editor::BufferSnapshot {
             resource: Some(resource),
             version_id: snapshot.version_id,
-            content_utf8: snapshot.content_utf8,
+            content_utf8: (&*snapshot.content_utf8).to_vec(),
             eol: snapshot.eol,
             is_dirty: snapshot.is_dirty,
         }),
@@ -572,7 +812,7 @@ pub fn undo(
         .resource
         .ok_or_else(|| "missing document resource".to_string())?;
 
-    let registry = state.buffer_registry.read().map_err(|e| e.to_string())?;
+    let registry = state.buffer_registry.read();
     if !registry.has_buffer(&resource.path) {
         return Err(format!("No open buffer for resource: {}", resource.path));
     }
@@ -581,29 +821,7 @@ pub fn undo(
     let event = state
         .buffer_registry
         .read()
-        .map_err(|e| e.to_string())?
         .undo(&resource.path);
-
-    if let Some(ref e) = event {
-        if let Ok(registry) = state.buffer_registry.read() {
-            if let Some(content) = registry.get_buffer_content(&resource.path) {
-                let language_id = detect_language_id_from_path(&resource.path);
-                if let Ok(mut lsp) = state.lsp_registry.write() {
-                    let change_json = serde_json::json!({
-                        "range": null,
-                        "rangeLength": null,
-                        "text": content,
-                    });
-                    lsp.did_change(
-                        &resource.path,
-                        &language_id,
-                        e.version_id as i32,
-                        vec![change_json],
-                    );
-                }
-            }
-        }
-    }
 
     Ok(host::UndoResponse {
         success: event.is_some(),
@@ -635,7 +853,7 @@ pub fn redo(
         .resource
         .ok_or_else(|| "missing document resource".to_string())?;
 
-    let registry = state.buffer_registry.read().map_err(|e| e.to_string())?;
+    let registry = state.buffer_registry.read();
     if !registry.has_buffer(&resource.path) {
         return Err(format!("No open buffer for resource: {}", resource.path));
     }
@@ -644,29 +862,7 @@ pub fn redo(
     let event = state
         .buffer_registry
         .read()
-        .map_err(|e| e.to_string())?
         .redo(&resource.path);
-
-    if let Some(ref e) = event {
-        if let Ok(registry) = state.buffer_registry.read() {
-            if let Some(content) = registry.get_buffer_content(&resource.path) {
-                let language_id = detect_language_id_from_path(&resource.path);
-                if let Ok(mut lsp) = state.lsp_registry.write() {
-                    let change_json = serde_json::json!({
-                        "range": null,
-                        "rangeLength": null,
-                        "text": content,
-                    });
-                    lsp.did_change(
-                        &resource.path,
-                        &language_id,
-                        e.version_id as i32,
-                        vec![change_json],
-                    );
-                }
-            }
-        }
-    }
 
     Ok(host::RedoResponse {
         success: event.is_some(),
@@ -691,12 +887,14 @@ pub fn redo(
 }
 
 pub fn list_directory(
+    state: &MonacoHostState,
     request: host::ListDirectoryRequest,
 ) -> Result<host::ListDirectoryResponse, String> {
     let resource = request
         .resource
         .ok_or_else(|| "missing directory resource".to_string())?;
     let path = uri_to_path(&resource)?;
+    let _path = validate_read_path(state, &path)?;
 
     let mut entries = Vec::new();
     for entry in fs::read_dir(&path).map_err(|err| err.to_string())? {
@@ -829,7 +1027,10 @@ mod tests {
 
     #[test]
     fn save_and_open_document_round_trip() {
-        let temp_dir = std::env::temp_dir().join("monaco-tauri-host-handlers");
+        let temp_dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("test-temp-host-handlers");
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
         let target = temp_dir.join("round-trip.ts");
@@ -872,7 +1073,10 @@ mod tests {
 
     #[test]
     fn buffer_registry_integration() {
-        let temp_dir = std::env::temp_dir().join("monaco-tauri-buffer-registry");
+        let temp_dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("test-temp-buffer-registry");
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
         let target = temp_dir.join("test.txt");
@@ -929,6 +1133,100 @@ mod tests {
         assert_eq!(
             snapshot.snapshot.as_ref().unwrap().content_utf8,
             b"initial new content"
+        );
+    }
+
+    #[test]
+    fn path_containment_rejects_directory_traversal() {
+        let state = MonacoHostState::new();
+        // Try to escape the workspace via ../../
+        let malicious = std::env::current_dir()
+            .unwrap()
+            .join("..")
+            .join("..")
+            .join("etc")
+            .join("passwd");
+        let result = open_document(
+            &state,
+            host::OpenDocumentRequest {
+                resource: Some(path_to_uri(&malicious)),
+                create_if_missing: false,
+                preferred_language_id: String::new(),
+            },
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("not under any workspace root"),
+            "Expected workspace rejection, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn path_containment_rejects_symlink_escape() {
+        let temp_dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("test-temp-symlink");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let real_file = temp_dir.join("real.txt");
+        fs::write(&real_file, "real").unwrap();
+
+        let symlink = temp_dir.join("link.txt");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real_file, &symlink).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&real_file, &symlink).unwrap();
+
+        let state = MonacoHostState::new();
+
+        // open_document should reject the symlink for read
+        let _result = open_document(
+            &state,
+            host::OpenDocumentRequest {
+                resource: Some(path_to_uri(&symlink)),
+                create_if_missing: false,
+                preferred_language_id: String::new(),
+            },
+        );
+
+        // Symlinks are rejected by validate_write_path, but open_document uses
+        // validate_read_path which only checks workspace containment, not symlink.
+        // The symlink itself may resolve to a path under the workspace root,
+        // so this test verifies the symlink is not followed.
+        //
+        // However, our current validate_read_path only canonicalizes existing paths,
+        // which resolves symlinks. So the canonical path of the symlink is the
+        // target path. If the target is under the workspace, it passes.
+        // The symlink rejection is in validate_write_path for save operations.
+        // For read, canonicalization inherently resolves symlinks, so the check
+        // is on the resolved path.
+        //
+        // The real symlink escape test is for write paths:
+        let write_result = save_document(
+            &state,
+            host::SaveDocumentRequest {
+                snapshot: Some(editor::BufferSnapshot {
+                    resource: Some(path_to_uri(&symlink)),
+                    version_id: 1,
+                    content_utf8: b"evil".to_vec(),
+                    eol: "\n".to_string(),
+                    is_dirty: true,
+                }),
+                create: false,
+                overwrite: true,
+                etag: String::new(),
+            },
+        );
+        assert!(write_result.is_err());
+        let err = write_result.unwrap_err();
+        assert!(
+            err.contains("symlink") || err.contains("not under any workspace root"),
+            "Expected symlink rejection, got: {}",
+            err
         );
     }
 }

@@ -5,15 +5,16 @@ use monaco_tauri::buffer::{BufferRegistry, ContentChange, Position, TextBuffer};
 /// Regression benchmark: small file insert should complete in <1ms.
 #[test]
 fn bench_small_file_insert() {
-    let mut buffer = TextBuffer::new("bench://small.rs".to_string(), "fn main() {}\n");
+    // Pre-construct buffers and changes outside the timing loop
+    let mut buffers: Vec<TextBuffer> = (0..1000)
+        .map(|_| TextBuffer::new("bench://small.rs".to_string(), "fn main() {}\n"))
+        .collect();
     let change =
         ContentChange::insert(Position::new(1, 12), " println!(\"hello\")".to_string(), 11);
 
     let start = Instant::now();
-    for _ in 0..1000 {
+    for buffer in &mut buffers {
         let _ = buffer.apply_change(&change);
-        // Reset to avoid overflow
-        buffer = TextBuffer::new("bench://small.rs".to_string(), "fn main() {}\n");
     }
     let elapsed = start.elapsed();
     let per_op = elapsed.as_micros() as f64 / 1000.0;

@@ -19,52 +19,6 @@ pub fn line_diff(old_text: &str, new_text: &str) -> Vec<DiffEdit> {
 
     let lcs = compute_lcs(&old_lines, &new_lines);
     let mut edits = Vec::new();
-    let mut old_idx = 0;
-    let mut new_idx = 0;
-
-    for matched_line in &lcs {
-        // Skip unchanged lines until we find the matched line
-        while old_idx < old_lines.len() && old_lines[old_idx] != *matched_line {
-            // This line was deleted
-            let line_num = (old_idx + 1) as u32;
-            edits.push(DiffEdit {
-                start_line: line_num,
-                start_column: 1,
-                end_line: line_num + 1,
-                end_column: 1,
-                text: String::new(),
-            });
-            old_idx += 1;
-        }
-
-        // Now old_lines[old_idx] == new_lines[new_idx] == matched_line
-        if old_idx < old_lines.len() {
-            old_idx += 1;
-        }
-        if new_idx < new_lines.len() {
-            new_idx += 1;
-        }
-    }
-
-    // Any remaining old lines were deleted
-    while old_idx < old_lines.len() {
-        let line_num = (old_idx + 1) as u32;
-        edits.push(DiffEdit {
-            start_line: line_num,
-            start_column: 1,
-            end_line: line_num + 1,
-            end_column: 1,
-            text: String::new(),
-        });
-        old_idx += 1;
-    }
-
-    // Any remaining new lines were inserted at the end
-    // (handled by checking which new lines weren't consumed)
-    // Actually, we need to track which new lines were consumed.
-    // For simplicity, let's rebuild with a consumed tracking approach.
-
-    edits.clear();
     let mut old_i = 0usize;
     let mut new_i = 0usize;
 

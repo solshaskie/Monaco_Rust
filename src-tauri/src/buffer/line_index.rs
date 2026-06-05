@@ -85,20 +85,18 @@ impl LineIndex {
     }
 
     /// Converts a position (line, column) to a byte offset.
-    /// Column is in UTF-16 code units for Monaco compatibility.
-    pub fn position_to_offset(&self, content: &str, position: super::Position) -> Option<usize> {
-        let line_start = self.line_start_offset(position.line)?;
-        let line_content = &content[line_start..];
-
-        // Get the line content (up to next newline or end)
-        let line_end = line_content.find('\n').unwrap_or(line_content.len());
-        let line_str = &line_content[..line_end];
-
-        // Convert UTF-16 column to UTF-8 byte offset within the line
+    /// `line_text` is the text of the line without its trailing newline.
+    /// `line_start` is the byte offset of the line's first character in the document.
+    pub fn position_to_offset(
+        &self,
+        line_text: &str,
+        line_start: usize,
+        position: super::Position,
+    ) -> Option<usize> {
         let mut utf16_count = 0;
         let mut byte_offset = 0;
 
-        for ch in line_str.chars() {
+        for ch in line_text.chars() {
             if utf16_count >= (position.column - 1) as usize {
                 break;
             }
@@ -108,44 +106,53 @@ impl LineIndex {
 
         // If column is beyond line length, clamp to line end
         if utf16_count < (position.column - 1) as usize {
-            byte_offset = line_str.len();
+            byte_offset = line_text.len();
         }
 
         Some(line_start + byte_offset)
     }
 
-    /// Converts a byte offset to a position (line, column).
-    /// Column is returned in UTF-16 code units.
-    pub fn offset_to_position(&self, content: &str, offset: usize) -> Option<super::Position> {
-        if offset > content.len() {
+    /// Returns the 1-indexed line number that contains `offset`.
+    pub fn offset_to_line(&self, offset: usize) -> Option<u32> {
+        if self.line_starts.is_empty() {
             return None;
         }
-
-        // Find which line this offset is on
-        let mut line = 1;
         for i in 0..self.line_starts.len() - 1 {
             if offset >= self.line_starts[i] && offset < self.line_starts[i + 1] {
-                line = (i + 1) as u32;
-                break;
+                return Some((i + 1) as u32);
             }
         }
-
-        // Handle offset at or beyond last line start
         if offset >= *self.line_starts.last()? {
-            line = self.line_starts.len() as u32;
+            return Some(self.line_starts.len() as u32);
+        }
+        None
+    }
+
+    /// Incrementally update the line index after an edit.
+    /// `content_from_line` is the document content starting at `line_start_byte`.
+    /// Only lines from the affected line onward are re-scanned.
+    pub fn update(&mut self, content_from_line: &str, line_start_byte: usize) {
+        if self.line_starts.is_empty() {
+            *self = Self::new(content_from_line);
+            return;
         }
 
-        let line_start = self.line_start_offset(line)?;
-        let bytes_into_line = offset - line_start;
+        let line_idx = match self.line_starts.binary_search(&line_start_byte) {
+            Ok(i) => i,
+            Err(0) => 0,
+            Err(i) => i - 1,
+        };
 
-        // Count UTF-16 code units up to bytes_into_line
-        let line_content = &content[line_start..];
-        let line_end = line_content.find('\n').unwrap_or(line_content.len());
-        let line_str = &line_content[..line_end.min(bytes_into_line)];
+        self.line_starts.truncate(line_idx + 1);
 
-        let column = line_str.encode_utf16().count() as u32 + 1;
-
-        Some(super::Position::new(line, column))
+        let start = self.line_starts[line_idx];
+        let mut offset = start;
+        for ch in content_from_line.chars() {
+            offset += ch.len_utf8();
+            if ch == '\n' {
+                self.line_starts.push(offset);
+            }
+        }
     }
 }
 
@@ -207,43 +214,44 @@ mod tests {
         let index = LineIndex::new(content);
 
         assert_eq!(
-            index.position_to_offset(content, crate::buffer::Position::new(1, 1)),
+            index.position_to_offset("hello", 0, crate::buffer::Position::new(1, 1)),
             Some(0)
         );
         assert_eq!(
-            index.position_to_offset(content, crate::buffer::Position::new(1, 3)),
+            index.position_to_offset("hello", 0, crate::buffer::Position::new(1, 3)),
             Some(2)
         );
         assert_eq!(
-            index.position_to_offset(content, crate::buffer::Position::new(2, 1)),
+            index.position_to_offset("world", 6, crate::buffer::Position::new(2, 1)),
             Some(6)
         );
         assert_eq!(
-            index.position_to_offset(content, crate::buffer::Position::new(2, 4)),
+            index.position_to_offset("world", 6, crate::buffer::Position::new(2, 4)),
             Some(9)
         );
     }
 
     #[test]
-    fn offset_to_position() {
+    fn offset_to_line() {
         let content = "hello\nworld";
         let index = LineIndex::new(content);
 
-        assert_eq!(
-            index.offset_to_position(content, 0),
-            Some(crate::buffer::Position::new(1, 1))
-        );
-        assert_eq!(
-            index.offset_to_position(content, 2),
-            Some(crate::buffer::Position::new(1, 3))
-        );
-        assert_eq!(
-            index.offset_to_position(content, 6),
-            Some(crate::buffer::Position::new(2, 1))
-        );
-        assert_eq!(
-            index.offset_to_position(content, 9),
-            Some(crate::buffer::Position::new(2, 4))
-        );
+        assert_eq!(index.offset_to_line(0), Some(1));
+        assert_eq!(index.offset_to_line(2), Some(1));
+        assert_eq!(index.offset_to_line(6), Some(2));
+        assert_eq!(index.offset_to_line(9), Some(2));
+    }
+
+    #[test]
+    fn incremental_update() {
+        let content = "hello\nworld\nfoo";
+        let mut index = LineIndex::new(content);
+        assert_eq!(index.line_starts, vec![0, 6, 12]);
+
+        // Simulate inserting a newline in the middle of line 1
+        // Content becomes "hel\nlo\nworld\nfoo"
+        let updated = "hel\nlo\nworld\nfoo";
+        index.update(updated, 0);
+        assert_eq!(index.line_starts, vec![0, 4, 7, 13]);
     }
 }

@@ -96,68 +96,9 @@ impl EventBroadcaster {
     }
 }
 
-/// A lightweight subscription tracker for buffer events.
-///
-/// Tracks which resources have active listeners so the backend can
-/// avoid emitting events for unobserved buffers.
-#[derive(Debug, Default)]
-pub struct EventSubscriptionTracker {
-    /// Set of resource paths that have active subscribers.
-    subscribed_paths: std::collections::HashSet<String>,
-    /// Monotonically increasing event sequence number for ordering.
-    sequence: u64,
-}
-
-impl EventSubscriptionTracker {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Registers a subscription for a buffer path.
-    pub fn subscribe(&mut self, path: &str) {
-        self.subscribed_paths.insert(path.to_string());
-    }
-
-    /// Removes a subscription for a buffer path.
-    pub fn unsubscribe(&mut self, path: &str) {
-        self.subscribed_paths.remove(path);
-    }
-
-    /// Returns true if the given path has active subscribers.
-    pub fn is_subscribed(&self, path: &str) -> bool {
-        self.subscribed_paths.contains(path)
-    }
-
-    /// Returns the next sequence number and increments the counter.
-    pub fn next_sequence(&mut self) -> u64 {
-        self.sequence += 1;
-        self.sequence
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn subscription_tracker_tracks_subscriptions() {
-        let mut tracker = EventSubscriptionTracker::new();
-        assert!(!tracker.is_subscribed("test://a.rs"));
-
-        tracker.subscribe("test://a.rs");
-        assert!(tracker.is_subscribed("test://a.rs"));
-
-        tracker.unsubscribe("test://a.rs");
-        assert!(!tracker.is_subscribed("test://a.rs"));
-    }
-
-    #[test]
-    fn subscription_tracker_sequence_increments() {
-        let mut tracker = EventSubscriptionTracker::new();
-        assert_eq!(tracker.next_sequence(), 1);
-        assert_eq!(tracker.next_sequence(), 2);
-        assert_eq!(tracker.next_sequence(), 3);
-    }
 
     #[test]
     fn buffer_content_changed_event_roundtrip() {

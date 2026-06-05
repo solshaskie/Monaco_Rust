@@ -6,37 +6,8 @@ on:
       - 'v*'
 
 jobs:
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    outputs:
-      release_id: ${{ steps.create-release.outputs.id }}
-      upload_url: ${{ steps.create-release.outputs.upload_url }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          awk '/^## \[/ {if (p) exit; p=1} p' CHANGELOG.md | head -n 50 > RELEASE_NOTES.md
-
-      - name: Create Release
-        id: create-release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ steps.changelog.outputs.version }}
-          body_path: RELEASE_NOTES.md
-          draft: true
-          prerelease: false
-
   build-release:
     name: Build Release Artifacts
-    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -63,21 +34,21 @@ jobs:
             asset_name: monaco-tauri-windows-x86_64
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           node-version: 20
 
       - name: Install Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: src-tauri
 
@@ -91,7 +62,7 @@ jobs:
           fi
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@v3
+        uses: arduino/setup-protoc@49933ea5288caeca8642d1e84afbd3f7d6820020 # v3
 
       - name: Build Release
         env:
@@ -123,57 +94,50 @@ jobs:
             gpg --batch --yes --detach-sign --armor ${{ matrix.asset_name }}.tar.gz
           fi
 
-      - name: Upload Release Asset (Unix)
-        if: runner.os != 'Windows'
-        uses: actions/upload-release-asset@v1
+      - name: Create release (idempotent)
+        if: matrix.platform == 'ubuntu-latest' && matrix.target == 'x86_64-unknown-linux-gnu'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.asset_name }}.tar.gz
-          asset_name: ${{ matrix.asset_name }}.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload Release Asset (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./${{ matrix.asset_name }}.zip
-          asset_name: ${{ matrix.asset_name }}.zip
-          asset_content_type: application/zip
-
-      - name: Upload signature
-        if: runner.os != 'Windows'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GPG_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
-          if [ -n "$GPG_KEY" ] && [ -f ${{ matrix.asset_name }}.tar.gz.asc ]; then
-            gh release upload "${{ github.ref_name }}" ${{ matrix.asset_name }}.tar.gz.asc
+          VERSION="${GITHUB_REF#refs/tags/}"
+          gh release create "$VERSION" --title "Release $VERSION" --generate-notes --draft || true
+
+      - name: Upload release asset (Unix)
+        if: runner.os != 'Windows'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" "${{ matrix.asset_name }}.tar.gz" --clobber
+          if [ -f "${{ matrix.asset_name }}.tar.gz.asc" ]; then
+            gh release upload "${{ github.ref_name }}" "${{ matrix.asset_name }}.tar.gz.asc" --clobber
           fi
+
+      - name: Upload release asset (Windows)
+        if: runner.os == 'Windows'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" "${{ matrix.asset_name }}.zip" --clobber
 
   publish-crates:
     name: Publish to crates.io
     needs: build-release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Install Rust
-        uses: dtolnay/rust-action@stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
         with:
           workspaces: src-tauri
 
       - name: Install Protoc
-        uses: arduino/setup-protoc@v3
+        uses: arduino/setup-protoc@49933ea5288caeca8642d1e84afbd3f7d6820020 # v3
 
       - name: Verify publishable
         env:

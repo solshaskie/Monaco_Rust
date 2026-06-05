@@ -80,6 +80,7 @@ export class WasmDecorationManager {
     this.batch = new DecorationBatch();
     this.batch.onFlush = (batch) => this._applyBatch(batch);
     this.currentDecorations = [];
+    this.currentDecorationsByLine = new Map(); // lineIndex -> [decId, ...]
     this.tokenCache = new Map(); // `${modelUri}@${versionId}` -> tokens
     this.tokenizationGen = new Map(); // model uri -> generation counter
     this.lastLineDecorations = new Map(); // lineIndex -> Array<dec object hash>
@@ -222,19 +223,19 @@ export class WasmDecorationManager {
   }
 
   _applyBatch(batch) {
-    // Build per-line decoration hashes to detect dirty regions
-    const changedLines = new Set();
+    // Build per-line decoration hashes to detect dirty regions.
+    // Only changed lines are passed to deltaDecorations; unchanged
+    // lines are left alone, avoiding a full getAllDecorations() scan.
     const newDecorations = [];
+    const oldIdsToRemove = [];
     const newLineDecorations = new Map();
 
     for (const [line, decs] of batch) {
-      // Hash this line's decorations for comparison
       const hash = decs.map(d => `${d.start}:${d.end}:${d.color}`).join('|');
       const lastHash = this.lastLineDecorations.get(line);
       newLineDecorations.set(line, hash);
 
       if (lastHash !== hash) {
-        changedLines.add(line);
         for (const dec of decs) {
           newDecorations.push({
             range: new monaco.Range(line + 1, dec.start + 1, line + 1, dec.end + 1),
@@ -244,50 +245,58 @@ export class WasmDecorationManager {
             },
           });
         }
+        const oldIds = this.currentDecorationsByLine.get(line);
+        if (oldIds) {
+          oldIdsToRemove.push(...oldIds);
+        }
       }
     }
 
-    // Collect old decorations for unchanged lines to preserve them
-    const oldDecorations = this.editor.getModel().getAllDecorations();
-    const oldByLine = new Map();
-    for (const dec of oldDecorations) {
-      if (!dec.options.inlineClassName || !dec.options.inlineClassName.startsWith('token-')) {
-        continue; // Skip non-token decorations
-      }
-      const line = dec.range.startLineNumber - 1;
-      if (!changedLines.has(line)) {
-        if (!oldByLine.has(line)) oldByLine.set(line, []);
-        oldByLine.get(line).push(dec);
+    // Remove stale IDs from the master list
+    if (oldIdsToRemove.length) {
+      const removeSet = new Set(oldIdsToRemove);
+      this.currentDecorations = this.currentDecorations.filter(id => !removeSet.has(id));
+    }
+
+    // Apply minimal delta; Monaco preserves everything not in oldIdsToRemove
+    const newIds = this.editor.deltaDecorations(oldIdsToRemove, newDecorations);
+    this.currentDecorations.push(...newIds);
+
+    // Map returned IDs back to their lines
+    let idIdx = 0;
+    for (const [line, decs] of batch) {
+      const lastHash = this.lastLineDecorations.get(line);
+      const hash = newLineDecorations.get(line);
+      if (lastHash !== hash) {
+        const count = decs.length;
+        this.currentDecorationsByLine.set(line, newIds.slice(idIdx, idIdx + count));
+        idIdx += count;
       }
     }
 
-    // Append preserved decorations for unchanged lines
-    for (const [line, decs] of oldByLine) {
-      for (const dec of decs) {
-        newDecorations.push({
-          range: dec.range,
-          options: dec.options,
-        });
-      }
-      newLineDecorations.set(line, this.lastLineDecorations.get(line));
+    for (const [line, hash] of newLineDecorations) {
+      this.lastLineDecorations.set(line, hash);
     }
-
-    // Use Monaco's deltaDecorations for minimal DOM mutation
-    this.currentDecorations = this.editor.deltaDecorations(this.currentDecorations, newDecorations);
-    this.lastLineDecorations = newLineDecorations;
   }
 
   clearCache() {
     this.tokenCache.clear();
     this.lastLineDecorations.clear();
+    this.currentDecorationsByLine.clear();
     this.latestTokensByUri.clear();
   }
 
   dispose() {
     this.batch.dispose();
     this.inlineWidgetBatch.dispose();
-    this.editor.deltaDecorations(this.currentDecorations, []);
+    const allIds = [];
+    for (const ids of this.currentDecorationsByLine.values()) {
+      allIds.push(...ids);
+    }
+    this.editor.deltaDecorations(allIds, []);
     this.currentDecorations = [];
+    this.currentDecorationsByLine.clear();
+    this.lastLineDecorations.clear();
     this.editor.deltaDecorations(this.inlineWidgetDecorations, []);
     this.inlineWidgetDecorations = [];
   }
